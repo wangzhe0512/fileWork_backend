@@ -69,18 +69,18 @@
       <scope>runtime</scope>
     </dependency>
 
-    <!-- MyBatis-Plus -->
+    <!-- MyBatis-Plus (Spring Boot 3 专用 starter) -->
     <dependency>
       <groupId>com.baomidou</groupId>
-      <artifactId>mybatis-plus-boot-starter</artifactId>
+      <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
       <version>${mybatis-plus.version}</version>
     </dependency>
 
-    <!-- JSQLParser (MyBatis-Plus 多租户插件依赖) -->
+    <!-- MyBatis-Plus JSQLParser 插件模块（分页/多租户等依赖此模块） -->
     <dependency>
-      <groupId>com.github.jsqlparser</groupId>
-      <artifactId>jsqlparser</artifactId>
-      <version>4.9</version>
+      <groupId>com.baomidou</groupId>
+      <artifactId>mybatis-plus-jsqlparser</artifactId>
+      <version>${mybatis-plus.version}</version>
     </dependency>
 
     <!-- JWT -->
