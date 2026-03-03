@@ -76,6 +76,13 @@
       <version>${mybatis-plus.version}</version>
     </dependency>
 
+    <!-- JSQLParser (MyBatis-Plus 多租户插件依赖) -->
+    <dependency>
+      <groupId>com.github.jsqlparser</groupId>
+      <artifactId>jsqlparser</artifactId>
+      <version>4.9</version>
+    </dependency>
+
     <!-- JWT -->
     <dependency>
       <groupId>io.jsonwebtoken</groupId>
