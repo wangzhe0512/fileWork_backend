@@ -11,7 +11,7 @@ services:
       MYSQL_CHARACTER_SET_SERVER: utf8mb4
       MYSQL_COLLATION_SERVER: utf8mb4_unicode_ci
     ports:
-      - "3306:3306"
+      - "23306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./src/main/resources/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -26,7 +26,7 @@ services:
     container_name: fileproc-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "26379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -42,7 +42,7 @@ services:
     container_name: fileproc-backend
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "28080:8080"
     environment:
       DB_HOST: mysql
       DB_PORT: 3306
