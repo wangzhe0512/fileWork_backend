@@ -167,7 +167,7 @@ public class DataFileService {
             throw BizException.of("非法路径");
         }
         if (!Files.exists(path)) throw BizException.of("文件不存在");
-        return new FileUtil.DownloadInfo(path, dataFile.getName());
+        return new DownloadInfo(path, dataFile.getName());
     }
 
     /** 下载信息 DTO（已迁移至 FileUtil.DownloadInfo，此处保留类型别名供 Controller 向后兼容） */

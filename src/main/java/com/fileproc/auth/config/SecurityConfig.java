@@ -93,7 +93,7 @@ public class SecurityConfig {
                 // Knife4j 文档（生产环境通过 springdoc.api-docs.enabled=false 关闭）
                 .requestMatchers("/v3/api-docs/**", "/swagger-ui/**",
                         "/swagger-ui.html", "/doc.html", "/webjars/**")
-                .access((auth, ctx) -> new AuthorizationDecision(swaggerEnabled))
+                .access((authentication, ctx) -> new AuthorizationDecision(swaggerEnabled))
                 // 其余全部需要认证（/files/** 已移除静态映射，通过 /download/{id} 鉴权接口访问）
                 // 其余全部需要认证
                 .anyRequest().authenticated()
