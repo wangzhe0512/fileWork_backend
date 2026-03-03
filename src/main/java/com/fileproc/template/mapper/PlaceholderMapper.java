@@ -1,0 +1,9 @@
+package com.fileproc.template.mapper;
+
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.fileproc.template.entity.Placeholder;
+import org.apache.ibatis.annotations.Mapper;
+
+@Mapper
+public interface PlaceholderMapper extends BaseMapper<Placeholder> {
+}

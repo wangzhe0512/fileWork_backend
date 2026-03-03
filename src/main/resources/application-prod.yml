@@ -1,0 +1,20 @@
+# 生产环境配置（覆盖 application.yml 默认值）
+
+# 关闭 Swagger / Knife4j 接口文档，防止接口信息泄露
+knife4j:
+  enable: false
+
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+# 生产环境 CORS 白名单（替换为实际前端域名，逗号分隔多域名）
+cors:
+  allowed-origins: https://your-production-domain.com
+
+# 生产环境关闭 MyBatis-Plus SQL 日志输出
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
