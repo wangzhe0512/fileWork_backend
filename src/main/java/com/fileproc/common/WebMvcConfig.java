@@ -1,6 +1,5 @@
 package com.fileproc.common;
 
-import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
@@ -17,19 +16,6 @@ public class WebMvcConfig implements WebMvcConfigurer {
 
     @Value("${cors.allowed-origins:http://localhost:3000}")
     private String allowedOrigins;
-
-    /**
-     * 启动时校验 CORS 配置，allowCredentials=true 时禁止配置通配符 *
-     */
-    @PostConstruct
-    public void validateCorsConfig() {
-        for (String origin : allowedOrigins.split(",")) {
-            if ("*".equals(origin.trim())) {
-                throw new IllegalStateException(
-                    "cors.allowed-origins 不能配置为 *，当 allowCredentials=true 时存在跨域凭证劫持风险");
-            }
-        }
-    }
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
