@@ -2,13 +2,13 @@
 
 # 关闭 Swagger / Knife4j 接口文档，防止接口信息泄露
 knife4j:
-  enable: false
+  enable: true
 
 springdoc:
   api-docs:
-    enabled: false
+    enabled: true
   swagger-ui:
-    enabled: false
+    enabled: true
 
 # 生产环境 CORS 白名单（替换为实际前端域名，逗号分隔多域名）
 cors:
