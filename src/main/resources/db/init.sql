@@ -274,9 +274,9 @@ CREATE TABLE IF NOT EXISTS notice_user (
 -- 初始数据
 -- ============================================================
 
--- 超管账号（密码：Admin@2024，BCrypt加密）
+-- 超管账号（密码：admin@123，BCrypt加密）
 INSERT INTO sys_admin (id, username, password, real_name) VALUES
-('admin-001', 'superadmin', '$2a$10$N.zmdr9k7uOCQb376NoUnuTJ8iAt6Z5EHsM8lE9lBaIW0WGKdXBde', '超级管理员');
+('admin-001', 'superadmin', '$2b$10$5HP2rOWMXAyw5qSAv161YeIoMoWIOqR5KFtRarwlJGPUp959.NDsm', '超级管理员');
 
 -- 演示租户
 INSERT INTO sys_tenant (id, name, code, status, admin_count, description) VALUES
