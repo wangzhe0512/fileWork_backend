@@ -52,10 +52,25 @@ public class TenantService {
 
     /** 新建租户 */
     public SysTenant createTenant(SysTenant tenant) {
-        // 校验 code 唯一
-        Long count = tenantMapper.selectCount(
-                new LambdaQueryWrapper<SysTenant>().eq(SysTenant::getCode, tenant.getCode()));
-        if (count > 0) throw BizException.of("租户编码已存在");
+        // 若未传 code，自动生成唯一编码（UUID 前8位，冲突时重试）
+        if (tenant.getCode() == null || tenant.getCode().isBlank()) {
+            String generated;
+            int retry = 0;
+            do {
+                generated = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+                retry++;
+            } while (retry < 3 && tenantMapper.selectCount(
+                    new LambdaQueryWrapper<SysTenant>().eq(SysTenant::getCode, generated)) > 0);
+            tenant.setCode(generated);
+        } else {
+            // 传了 code 则校验格式和唯一性
+            if (!tenant.getCode().matches("^[a-z0-9_-]+$")) {
+                throw BizException.of("租户编码只能包含小写字母、数字、下划线和连字符");
+            }
+            Long count = tenantMapper.selectCount(
+                    new LambdaQueryWrapper<SysTenant>().eq(SysTenant::getCode, tenant.getCode()));
+            if (count > 0) throw BizException.of("租户编码已存在");
+        }
 
         tenant.setId(UUID.randomUUID().toString());
         tenant.setStatus(TenantStatus.ACTIVE.getCode());
@@ -69,6 +84,11 @@ public class TenantService {
     public SysTenant updateTenant(String id, SysTenant tenant) {
         SysTenant existing = tenantMapper.selectById(id);
         if (existing == null) throw BizException.notFound("租户");
+        // 若传入 code，校验格式
+        if (tenant.getCode() != null && !tenant.getCode().isBlank()
+                && !tenant.getCode().matches("^[a-z0-9_-]+$")) {
+            throw BizException.of("租户编码只能包含小写字母、数字、下划线和连字符");
+        }
         // P1：若 code 发生变更，校验新 code 是否已被其他租户使用
         if (tenant.getCode() != null && !tenant.getCode().equals(existing.getCode())) {
             long count = tenantMapper.selectCount(
