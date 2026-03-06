@@ -335,10 +335,10 @@ INSERT INTO sys_role_permission (id, role_id, permission_code) VALUES
 ('rp-user-05', 'role-002', 'report:generate'),
 ('rp-user-06', 'role-002', 'template:read');
 
--- 演示用户（密码：Test@123，BCrypt加密）
+-- 演示用户（密码：test@123，BCrypt加密）
 INSERT INTO sys_user (id, tenant_id, username, real_name, password, email, phone, role_id, status) VALUES
-('user-001', 'tenant-001', 'admin', '系统管理员', '$2a$10$N.zmdr9k7uOCQb376NoUnuTJ8iAt6Z5EHsM8lE9lBaIW0WGKdXBde', 'admin@demo.com', '13800001111', 'role-001', 'active'),
-('user-002', 'tenant-001', 'operator', '操作员小王', '$2a$10$N.zmdr9k7uOCQb376NoUnuTJ8iAt6Z5EHsM8lE9lBaIW0WGKdXBde', 'operator@demo.com', '13800002222', 'role-002', 'active');
+('user-001', 'tenant-001', 'admin', '系统管理员', '$2b$10$yawoS2N//6ek9IQ5bkK1euD7.E.RHAVy9N/WEieSwM0lC9PZQFVye', 'admin@demo.com', '13800001111', 'role-001', 'active'),
+('user-002', 'tenant-001', 'operator', '操作员小王', '$2b$10$yawoS2N//6ek9IQ5bkK1euD7.E.RHAVy9N/WEieSwM0lC9PZQFVye', 'operator@demo.com', '13800002222', 'role-002', 'active');
 
 -- 默认系统配置
 INSERT INTO sys_config (id, tenant_id, site_name, logo_url, icp, max_file_size) VALUES

@@ -6,15 +6,26 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fileproc.common.BizException;
 import com.fileproc.common.PageResult;
 import com.fileproc.common.enums.TenantStatus;
+import com.fileproc.system.entity.SysPermission;
+import com.fileproc.system.entity.SysRole;
+import com.fileproc.system.entity.SysRolePermission;
+import com.fileproc.system.entity.SysUser;
+import com.fileproc.system.mapper.PermissionMapper;
+import com.fileproc.system.mapper.RoleMapper;
+import com.fileproc.system.mapper.RolePermissionMapper;
+import com.fileproc.system.mapper.UserMapper;
 import com.fileproc.tenant.entity.SysTenant;
 import com.fileproc.tenant.mapper.TenantMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * 租户管理 Service
@@ -24,6 +35,14 @@ import java.util.UUID;
 public class TenantService {
 
     private final TenantMapper tenantMapper;
+    private final RoleMapper roleMapper;
+    private final UserMapper userMapper;
+    private final PermissionMapper permissionMapper;
+    private final RolePermissionMapper rolePermissionMapper;
+    private final PasswordEncoder passwordEncoder;
+
+    /** 默认租户管理员初始密码 */
+    private static final String DEFAULT_ADMIN_PASSWORD = "tenant@123";
 
     /** 登录页获取活跃租户列表（P2-TENANT-05：仅返回 id/name，不暴露 code 等敏感字段） */
     public List<Map<String, Object>> getActiveTenantList() {
@@ -50,7 +69,8 @@ public class TenantService {
         return PageResult.of(result);
     }
 
-    /** 新建租户 */
+    /** 新建租户（含自动初始化管理员角色和 admin 账号） */
+    @Transactional(rollbackFor = Exception.class)
     public SysTenant createTenant(SysTenant tenant) {
         // 若未传 code，自动生成唯一编码（UUID 前8位，冲突时重试）
         if (tenant.getCode() == null || tenant.getCode().isBlank()) {
@@ -77,7 +97,57 @@ public class TenantService {
         tenant.setAdminCount(0);
         tenant.setCreatedAt(LocalDateTime.now());
         tenantMapper.insert(tenant);
+
+        // 自动初始化管理员角色和 admin 账号
+        initTenantAdmin(tenant.getId());
+
+        // 更新 adminCount = 1
+        tenant.setAdminCount(1);
+        tenantMapper.updateById(tenant);
+
         return tenant;
+    }
+
+    /**
+     * 为新租户初始化管理员角色（拥有全部 action 权限）和 admin 账号（密码 tenant@123）
+     */
+    private void initTenantAdmin(String tenantId) {
+        // 1. 创建"管理员"角色
+        SysRole adminRole = new SysRole();
+        adminRole.setId(UUID.randomUUID().toString());
+        adminRole.setTenantId(tenantId);
+        adminRole.setName("管理员");
+        adminRole.setCode("admin");
+        adminRole.setDescription("租户管理员，拥有全部权限");
+        adminRole.setCreatedAt(LocalDateTime.now());
+        roleMapper.insert(adminRole);
+
+        // 2. 查询全部 action 类型权限，批量绑定到管理员角色
+        List<SysPermission> allActions = permissionMapper.selectList(
+                new LambdaQueryWrapper<SysPermission>().eq(SysPermission::getType, "action")
+        );
+        if (!allActions.isEmpty()) {
+            List<SysRolePermission> rolePerms = allActions.stream().map(p -> {
+                SysRolePermission rp = new SysRolePermission();
+                rp.setId(UUID.randomUUID().toString());
+                rp.setRoleId(adminRole.getId());
+                rp.setPermissionCode(p.getCode());
+                return rp;
+            }).collect(Collectors.toList());
+            rolePermissionMapper.batchInsert(rolePerms);
+        }
+
+        // 3. 创建 admin 用户，密码 tenant@123 BCrypt 加密
+        SysUser adminUser = new SysUser();
+        adminUser.setId(UUID.randomUUID().toString());
+        adminUser.setTenantId(tenantId);
+        adminUser.setUsername("admin");
+        adminUser.setRealName("系统管理员");
+        adminUser.setPassword(passwordEncoder.encode(DEFAULT_ADMIN_PASSWORD));
+        adminUser.setRoleId(adminRole.getId());
+        adminUser.setStatus("active");
+        adminUser.setCreatedAt(LocalDateTime.now());
+        userMapper.insert(adminUser);
     }
 
     /** 更新租户信息（P1：校验 code 唯一性，排除自身） */
