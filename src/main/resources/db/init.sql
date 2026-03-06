@@ -62,8 +62,11 @@ CREATE TABLE IF NOT EXISTS sys_user (
   role_id      VARCHAR(36)  DEFAULT NULL,
   status       VARCHAR(16)  NOT NULL DEFAULT 'active' COMMENT 'active|disabled',
   avatar       VARCHAR(512) DEFAULT NULL,
-  created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  deleted      TINYINT(1)   NOT NULL DEFAULT 0,
+  created_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at     DATETIME     DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  last_login_at  DATETIME     DEFAULT NULL COMMENT '最后登录时间',
+  last_login_ip  VARCHAR(64)  DEFAULT NULL COMMENT '最后登录IP',
+  deleted        TINYINT(1)   NOT NULL DEFAULT 0,
   UNIQUE KEY uk_tenant_username (tenant_id, username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='租户用户表';
 

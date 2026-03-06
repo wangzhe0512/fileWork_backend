@@ -47,6 +47,13 @@ public class SysUser {
 
     private LocalDateTime createdAt;
 
+    @TableField(fill = com.baomidou.mybatisplus.annotation.FieldFill.UPDATE)
+    private LocalDateTime updatedAt;
+
+    private LocalDateTime lastLoginAt;
+
+    private String lastLoginIp;
+
     @TableLogic
     private Integer deleted;
 
