@@ -1,6 +1,5 @@
 package com.fileproc.auth.service;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fileproc.auth.util.JwtUtil;
 import com.fileproc.auth.util.TokenConstants;
 import com.fileproc.common.BizException;
@@ -59,11 +58,7 @@ public class AuthService {
         // 临时设置租户上下文（供租户插件使用）
         TenantContext.setTenantId(tenantId);
         try {
-            SysUser user = userMapper.selectOne(
-                    new LambdaQueryWrapper<SysUser>()
-                            .eq(SysUser::getUsername, username)
-                            .eq(SysUser::getTenantId, tenantId)
-            );
+            SysUser user = userMapper.selectForLogin(username, tenantId);
             if (user == null) {
                 incrementLoginFail(username + ":" + tenantId);
                 throw BizException.of(401, "账号或密码错误");

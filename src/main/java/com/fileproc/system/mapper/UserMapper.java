@@ -37,6 +37,14 @@ public interface UserMapper extends BaseMapper<SysUser> {
                                       @Param("keyword") String keyword);
 
     /**
+     * 登录专用查询：手写 SQL 显式包含 password 字段
+     * （@TableField(select=false) 对手写 SQL 无效，可正常取到 password）
+     */
+    @Select("SELECT id, tenant_id, username, real_name, password, role_id, status, created_at " +
+            "FROM sys_user WHERE username = #{username} AND tenant_id = #{tenantId} AND deleted = 0")
+    SysUser selectForLogin(@Param("username") String username, @Param("tenantId") String tenantId);
+
+    /**
      * 登录成功后更新最后登录时间和 IP（P1 修复）
      */
     @Update("UPDATE sys_user SET last_login_at = #{loginAt}, last_login_ip = #{loginIp} WHERE id = #{userId}")
