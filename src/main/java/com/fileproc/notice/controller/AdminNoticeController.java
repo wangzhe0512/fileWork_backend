@@ -30,7 +30,7 @@ public class AdminNoticeController {
     private final NoticeService noticeService;
 
     @Operation(summary = "分页查询通知列表")
-    @PreAuthorize("hasAuthority('system:notice:manage')")
+    @PreAuthorize("hasAuthority('notice:publish')")
     @GetMapping
     public R<PageResult<Notice>> list(
             @RequestParam(defaultValue = "1") int page,

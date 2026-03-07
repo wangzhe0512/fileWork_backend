@@ -60,4 +60,21 @@ public class UserController {
         userService.deleteUser(id);
         return R.ok();
     }
+
+    @Operation(summary = "修改当前用户密码")
+    @PostMapping("/change-password")
+    @PreAuthorize("hasAuthority('system:user:edit')")
+    public R<Void> changePassword(@Valid @RequestBody ChangePasswordRequest req) {
+        userService.changePassword(req.getOldPassword(), req.getNewPassword());
+        return R.ok();
+    }
+
+    @lombok.Data
+    public static class ChangePasswordRequest {
+        @jakarta.validation.constraints.NotBlank(message = "当前密码不能为空")
+        private String oldPassword;
+        @jakarta.validation.constraints.NotBlank(message = "新密码不能为空")
+        @jakarta.validation.constraints.Size(min = 6, message = "新密码至少6位")
+        private String newPassword;
+    }
 }

@@ -29,8 +29,8 @@ public class NoticeController {
     @Operation(summary = "获取我的通知列表")
     @PreAuthorize("hasAuthority('notice:read')")
     @GetMapping("/mine")
-    public R<List<Map<String, Object>>> myNotices() {
-        return R.ok(noticeService.getMyNotices());
+    public R<Map<String, Object>> myNotices() {
+        return R.ok(Map.of("list", noticeService.getMyNotices()));
     }
 
     @Operation(summary = "获取未读通知数")

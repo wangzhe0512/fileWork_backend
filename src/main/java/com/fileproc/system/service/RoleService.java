@@ -44,8 +44,8 @@ public class RoleService {
         List<java.util.Map<String, String>> permRows = rolePermissionMapper.selectPermsByRoleIds(roleIds);
         Map<String, List<String>> permsMap = permRows.stream()
                 .collect(Collectors.groupingBy(
-                        row -> row.get("roleId"),
-                        Collectors.mapping(row -> row.get("permissionCode"), Collectors.toList())
+                        row -> row.get("role_id"),
+                        Collectors.mapping(row -> row.get("permission_code"), Collectors.toList())
                 ));
         roles.forEach(role -> role.setPermissions(permsMap.getOrDefault(role.getId(), List.of())));
         return roles;

@@ -93,4 +93,34 @@ public class UserService {
         }
         userMapper.deleteById(id);
     }
+
+    @OperationLog(module = "用户管理", action = "修改密码")
+    public void changePassword(String oldPassword, String newPassword) {
+        // 获取当前用户
+        org.springframework.security.core.Authentication auth = 
+            org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || !(auth.getPrincipal() instanceof com.fileproc.auth.filter.UserPrincipal principal)) {
+            throw BizException.unauthorized("未登录");
+        }
+        String userId = principal.getUserId();
+        
+        // 使用自定义查询获取包含密码的用户信息（@TableField(select=false) 导致 selectById 查不到密码）
+        SysUser user = userMapper.selectOne(
+            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<SysUser>()
+                .eq(SysUser::getId, userId)
+                .select(SysUser::getId, SysUser::getPassword, SysUser::getTenantId)
+        );
+        if (user == null) throw BizException.notFound("用户");
+        
+        // 校验旧密码
+        if (!passwordEncoder.matches(oldPassword, user.getPassword())) {
+            throw BizException.of(400, "当前密码错误");
+        }
+        
+        // 更新新密码
+        SysUser updateUser = new SysUser();
+        updateUser.setId(userId);
+        updateUser.setPassword(passwordEncoder.encode(newPassword));
+        userMapper.updateById(updateUser);
+    }
 }

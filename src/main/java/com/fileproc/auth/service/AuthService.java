@@ -151,6 +151,7 @@ public class AuthService {
         info.put("roleName", roleName);
         info.put("avatar", user.getAvatar() != null ? user.getAvatar() : "");
         info.put("tenantId", user.getTenantId() != null ? user.getTenantId() : "");
+        info.put("status", user.getStatus() != null ? user.getStatus() : "active");
         info.put("permissions", permissions);
         return info;
     }
