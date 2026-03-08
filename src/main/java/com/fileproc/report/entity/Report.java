@@ -19,6 +19,9 @@ public class Report {
 
     private String companyId;
 
+    /** 关联的企业子模板ID（company_template.id），新架构使用 */
+    private String templateId;
+
     private String name;
 
     private Integer year;

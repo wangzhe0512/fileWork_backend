@@ -102,11 +102,32 @@
       <scope>runtime</scope>
     </dependency>
 
-    <!-- EasyExcel -->
+    <!-- EasyExcel（排除内置旧版 POI，使用统一的 5.2.5） -->
     <dependency>
       <groupId>com.alibaba</groupId>
       <artifactId>easyexcel</artifactId>
       <version>${easyexcel.version}</version>
+      <exclusions>
+        <exclusion>
+          <groupId>org.apache.poi</groupId>
+          <artifactId>poi</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.apache.poi</groupId>
+          <artifactId>poi-ooxml</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.apache.poi</groupId>
+          <artifactId>poi-ooxml-schemas</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+
+    <!-- Apache POI base -->
+    <dependency>
+      <groupId>org.apache.poi</groupId>
+      <artifactId>poi</artifactId>
+      <version>${poi.version}</version>
     </dependency>
 
     <!-- Apache POI (Word .docx) -->

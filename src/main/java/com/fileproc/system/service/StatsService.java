@@ -32,17 +32,28 @@ public class StatsService {
 
     public Map<String, Object> getStats() {
         // P1-TENANT-02：显式 tenantId 保底过滤，防止租户插件失效时数据泄露
+        // 同时过滤已删除数据（deleted = 0）
         String tenantId = TenantContext.getTenantId();
         long companyCount = companyMapper.selectCount(
-                new LambdaQueryWrapper<Company>().eq(Company::getTenantId, tenantId));
+                new LambdaQueryWrapper<Company>()
+                        .eq(Company::getTenantId, tenantId)
+                        .eq(Company::getDeleted, 0));
         long reportCount = reportMapper.selectCount(
-                new LambdaQueryWrapper<Report>().eq(Report::getTenantId, tenantId));
+                new LambdaQueryWrapper<Report>()
+                        .eq(Report::getTenantId, tenantId)
+                        .eq(Report::getDeleted, 0));
         long templateCount = templateMapper.selectCount(
-                new LambdaQueryWrapper<Template>().eq(Template::getTenantId, tenantId));
+                new LambdaQueryWrapper<Template>()
+                        .eq(Template::getTenantId, tenantId)
+                        .eq(Template::getDeleted, 0));
         long dataFileCount = dataFileMapper.selectCount(
-                new LambdaQueryWrapper<DataFile>().eq(DataFile::getTenantId, tenantId));
+                new LambdaQueryWrapper<DataFile>()
+                        .eq(DataFile::getTenantId, tenantId)
+                        .eq(DataFile::getDeleted, 0));
         long userCount = userMapper.selectCount(
-                new LambdaQueryWrapper<SysUser>().eq(SysUser::getTenantId, tenantId));
+                new LambdaQueryWrapper<SysUser>()
+                        .eq(SysUser::getTenantId, tenantId)
+                        .eq(SysUser::getDeleted, 0));
 
         return Map.of(
                 "companyCount", companyCount,

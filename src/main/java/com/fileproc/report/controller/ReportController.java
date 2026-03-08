@@ -34,8 +34,9 @@ import java.util.Map;
 /**
  * 报告管理接口
  * GET  /reports                   - 分页查询
- * POST /reports/generate          - 生成报告
- * POST /reports/update            - 更新报告
+ * POST /reports/generate          - 生成报告（异步，立即返回pending）
+ * POST /reports/update            - 更新报告（异步，立即返回pending）
+ * GET  /reports/{id}/status       - 轮询报告生成状态
  * POST /reports/{id}/archive      - 归档
  * POST /reports/upload            - 手动上传历史报告
  * DELETE /reports/{id}            - 删除
@@ -67,14 +68,22 @@ public class ReportController {
     @PreAuthorize("hasAuthority('report:generate')")
     @PostMapping("/generate")
     public R<Report> generate(@Valid @RequestBody GenerateReq req) {
-        return R.ok(reportService.generateReport(req.getCompanyId(), req.getYear(), req.getName()));
+        return R.ok(reportService.generateReport(req.getCompanyId(), req.getYear(), req.getName(), req.getCompanyTemplateId()));
     }
 
     @Operation(summary = "更新报告")
     @PreAuthorize("hasAuthority('report:edit')")
     @PostMapping("/update")
     public R<Report> update(@Valid @RequestBody UpdateReq req) {
-        return R.ok(reportService.updateReport(req.getReportId()));
+        return R.ok(reportService.updateReport(req.getReportId(), req.getCompanyTemplateId()));
+    }
+
+    @Operation(summary = "轮询报告生成状态",
+            description = "前端在调用 generate/update 后轮询此接口，直到 generationStatus 为 success 或 failed")
+    @PreAuthorize("hasAuthority('report:list')")
+    @GetMapping("/{id}/status")
+    public R<Map<String, Object>> getStatus(@PathVariable String id) {
+        return R.ok(reportService.getGenerationStatus(id));
     }
 
     @Operation(summary = "归档报告")
@@ -138,6 +147,9 @@ public class ReportController {
         private Integer year;
         @Size(max = 100)
         private String name;
+        /** 指定使用的企业子模板ID（可选，不传则自动取最新激活子模板） */
+        @Size(max = 36)
+        private String companyTemplateId;
     }
 
     @Data
@@ -145,6 +157,9 @@ public class ReportController {
         @NotBlank(message = "reportId不能为空")
         @Size(max = 36)
         private String reportId;
+        /** 更新时指定使用的企业子模板ID（可选） */
+        @Size(max = 36)
+        private String companyTemplateId;
     }
 
     @Data

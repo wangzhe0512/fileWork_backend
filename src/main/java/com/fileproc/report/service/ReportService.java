@@ -13,11 +13,12 @@ import com.fileproc.datafile.entity.DataFile;
 import com.fileproc.datafile.mapper.DataFileMapper;
 import com.fileproc.report.entity.Report;
 import com.fileproc.report.mapper.ReportMapper;
-import com.fileproc.template.entity.Placeholder;
 import com.fileproc.template.entity.ReportModule;
 import com.fileproc.template.entity.Template;
+import com.fileproc.template.mapper.CompanyTemplateMapper;
 import com.fileproc.template.mapper.ModuleMapper;
 import com.fileproc.template.mapper.PlaceholderMapper;
+import com.fileproc.template.mapper.SystemPlaceholderMapper;
 import com.fileproc.template.mapper.TemplateMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -52,6 +53,11 @@ public class ReportService {
     private final PlaceholderMapper placeholderMapper;
     private final ModuleMapper moduleMapper;
     private final ReportGenerateEngine reportGenerateEngine;
+    // 新架构：企业子模板 + 系统占位符
+    private final CompanyTemplateMapper companyTemplateMapper;
+    private final SystemPlaceholderMapper systemPlaceholderMapper;
+    // 异步生成服务（独立Bean，@Async代理生效）
+    private final ReportAsyncService reportAsyncService;
 
     @Value("${file.upload-dir:./uploads}")
     private String uploadDir;
@@ -70,10 +76,28 @@ public class ReportService {
         return PageResult.of(result);
     }
 
-    /** 生成报告：校验重复 + 创建 editing 记录 + 调用引擎生成文件 */
+    /** 生成报告：校验重复 + 创建 editing 记录 + 异步生成文件 */
     @OperationLog(module = "报告管理", action = "生成报告")
     @Transactional(rollbackFor = Exception.class)
     public Report generateReport(String companyId, int year, String name) {
+        return generateReport(companyId, year, name, null);
+    }
+
+    /**
+     * 生成报告（新版本）：支持指定企业子模板ID
+     * <p>
+     * 立即返回 generationStatus=pending 的报告记录，后台异步执行文件生成。
+     * 前端通过 GET /reports/{id}/status 轮询进度。
+     * </p>
+     *
+     * @param companyId         企业ID
+     * @param year              报告年份
+     * @param name              报告名称
+     * @param companyTemplateId 指定使用的子模板ID（null=自动取最新active子模板，降级到旧template表）
+     */
+    @OperationLog(module = "报告管理", action = "生成报告")
+    @Transactional(rollbackFor = Exception.class)
+    public Report generateReport(String companyId, int year, String name, String companyTemplateId) {
         String tenantId = TenantContext.getTenantId();
 
         // 校验是否已有 history 记录
@@ -98,6 +122,7 @@ public class ReportService {
             throw BizException.of(400, "该年度已有编辑中的报告，请先归档或删除");
         }
 
+        // 先落库，状态为 pending，立即返回
         Report report = new Report();
         report.setId(UUID.randomUUID().toString());
         report.setTenantId(tenantId);
@@ -105,86 +130,73 @@ public class ReportService {
         report.setName(name != null ? name : year + "年度报告");
         report.setYear(year);
         report.setStatus(ReportStatus.EDITING.getCode());
+        report.setGenerationStatus(ReportStatus.PENDING.getCode());
         report.setIsManualUpload(false);
+        report.setTemplateId(companyTemplateId);
         report.setCreatedAt(LocalDateTime.now());
         reportMapper.insert(report);
 
-        // 调用引擎生成 Word 文件（若模板存在则执行，否则仅保留记录）
-        tryGenerateFile(report, companyId, year, tenantId);
+        // 提交异步生成任务（事务提交后执行，tenantId 显式传参）
+        final String reportId = report.getId();
+        final String finalTenantId = tenantId;
+        final String finalTemplateId = companyTemplateId;
+        // 使用 TransactionSynchronizationManager 确保事务提交后再触发异步任务
+        org.springframework.transaction.support.TransactionSynchronizationManager
+                .registerSynchronization(new org.springframework.transaction.support.TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        reportAsyncService.asyncGenerateFile(reportId, companyId, year, finalTenantId, finalTemplateId);
+                    }
+                });
 
         return report;
     }
 
-    /**
-     * 尝试调用引擎生成报告文件，更新 filePath/fileSize 到 DB。
-     * 若模板不存在则跳过（不抛异常，保持报告记录可用）。
-     */
-    private void tryGenerateFile(Report report, String companyId, int year, String tenantId) {
-        Template template = templateMapper.selectActiveWithFilePath(companyId, year, tenantId);
-        if (template == null || template.getFilePath() == null) {
-            log.warn("[ReportService] 未找到企业 {} 年度 {} 的 active 模板，跳过文件生成", companyId, year);
-            return;
-        }
-
-        // 查询占位符
-        List<Placeholder> placeholders = placeholderMapper.selectList(
-                new LambdaQueryWrapper<Placeholder>()
-                        .eq(Placeholder::getCompanyId, companyId)
-        );
-
-        // 查询带 filePath 的数据文件
-        List<DataFile> dataFiles = dataFileMapper.selectWithFilePathByCompanyAndYear(companyId, year);
-
-        // 构造输出路径
-        String dateDir = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy"));
-        String relativeDir = "reports/" + tenantId + "/" + companyId + "/" + dateDir + "/";
-        String fileName = report.getId() + ".docx";
-        String absoluteOutputPath = uploadDir + "/" + relativeDir + fileName;
-
-        try {
-            reportGenerateEngine.generate(
-                    resolveAbsolutePath(template.getFilePath()),
-                    placeholders,
-                    dataFiles.stream()
-                            .peek(df -> df.setFilePath(resolveAbsolutePath(df.getFilePath())))
-                            .toList(),
-                    absoluteOutputPath
-            );
-
-            // 更新 report 记录的文件信息
-            long fileSize = Files.size(Paths.get(absoluteOutputPath));
-            report.setFilePath(relativeDir + fileName);
-            report.setFileSize(formatSize(fileSize));
-            report.setGenerationStatus(ReportStatus.SUCCESS.getCode());
-            report.setGenerationError(null);
-            report.setUpdatedAt(LocalDateTime.now());
-            reportMapper.updateById(report);
-
-            log.info("[ReportService] 报告文件已生成: {}", absoluteOutputPath);
-        } catch (Exception e) {
-            log.error("[ReportService] 报告文件生成失败: {}", e.getMessage(), e);
-            // 记录失败状态，让前端可感知并决策重试，不抛出异常保持接口可用
-            String errMsg = e.getMessage();
-            report.setGenerationStatus(ReportStatus.FAILED.getCode());
-            report.setGenerationError(errMsg != null && errMsg.length() > 500
-                    ? errMsg.substring(0, 500) : errMsg);
-            reportMapper.updateById(report);
-        }
-    }
-
-    /** 更新报告（替换为新版本，从 DB 记录中取 companyId/year，防止前端篡改） */
+    /** 更新报告（重新生成，从 DB 记录中取 companyId/year，防止前端篡改） */
     @OperationLog(module = "报告管理", action = "更新报告")
     @Transactional(rollbackFor = Exception.class)
     public Report updateReport(String reportId) {
+        return updateReport(reportId, null);
+    }
+
+    /**
+     * 更新报告（支持指定子模板ID）
+     * <p>
+     * 立即返回 generationStatus=pending 的报告记录，后台异步重新生成文件。
+     * </p>
+     *
+     * @param reportId          报告ID
+     * @param companyTemplateId 指定使用的子模板ID（null=使用报告原绑定模板或最新激活子模板）
+     */
+    @OperationLog(module = "报告管理", action = "更新报告")
+    @Transactional(rollbackFor = Exception.class)
+    public Report updateReport(String reportId, String companyTemplateId) {
         Report report = reportMapper.selectById(reportId);
         if (report == null) throw BizException.notFound("报告");
 
         String tenantId = TenantContext.getTenantId();
-        // 从报告自身取 companyId/year，不依赖前端传值
-        tryGenerateFile(report, report.getCompanyId(), report.getYear(), tenantId);
+        // 优先使用传入的 companyTemplateId，其次使用报告原绑定的 templateId
+        String templateId = companyTemplateId != null ? companyTemplateId : report.getTemplateId();
 
+        // 重置为 pending 状态
+        report.setGenerationStatus(ReportStatus.PENDING.getCode());
+        report.setGenerationError(null);
         report.setUpdatedAt(LocalDateTime.now());
         reportMapper.updateById(report);
+
+        // 提交异步生成任务（事务提交后执行）
+        final String companyId = report.getCompanyId();
+        final int year = report.getYear();
+        final String finalTenantId = tenantId;
+        final String finalTemplateId = templateId;
+        org.springframework.transaction.support.TransactionSynchronizationManager
+                .registerSynchronization(new org.springframework.transaction.support.TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        reportAsyncService.asyncGenerateFile(reportId, companyId, year, finalTenantId, finalTemplateId);
+                    }
+                });
+
         return report;
     }
 
@@ -270,6 +282,24 @@ public class ReportService {
             }
         }
         reportMapper.deleteById(id);
+    }
+
+    /**
+     * 查询报告生成状态（供前端轮询）
+     *
+     * @return { id, generationStatus, generationError, filePath }
+     */
+    public Map<String, Object> getGenerationStatus(String id) {
+        Report report = reportMapper.selectById(id);
+        if (report == null) throw BizException.notFound("报告");
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("id", report.getId());
+        result.put("generationStatus", report.getGenerationStatus());
+        result.put("generationError", report.getGenerationError());
+        // 生成成功时返回 filePath（前端可据此判断是否可下载）
+        result.put("filePath", ReportStatus.SUCCESS.getCode().equals(report.getGenerationStatus())
+                ? report.getFilePath() : null);
+        return result;
     }
 
     /**

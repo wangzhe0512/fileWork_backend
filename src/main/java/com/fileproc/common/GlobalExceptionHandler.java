@@ -15,6 +15,7 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
 
 import java.util.stream.Collectors;
 
@@ -93,6 +94,13 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public R<Void> handleMaxUploadSize(MaxUploadSizeExceededException e) {
         return R.fail(400, "上传文件超过大小限制");
+    }
+
+    /** 文件上传异常（Multipart请求错误） */
+    @ExceptionHandler(MultipartException.class)
+    public R<Void> handleMultipartException(MultipartException e, HttpServletRequest request) {
+        log.error("文件上传异常: uri={}, error={}", request.getRequestURI(), e.getMessage());
+        return R.fail(400, "文件上传失败，请检查文件格式和大小");
     }
 
     /** 兜底异常 */

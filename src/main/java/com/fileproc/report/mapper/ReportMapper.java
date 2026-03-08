@@ -5,6 +5,7 @@ import com.fileproc.report.entity.Report;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 @Mapper
 public interface ReportMapper extends BaseMapper<Report> {
@@ -21,4 +22,10 @@ public interface ReportMapper extends BaseMapper<Report> {
      */
     @Select("SELECT COUNT(*) FROM report WHERE company_id = #{companyId} AND year = #{year} AND status = 'editing' AND deleted = 0")
     long countEditingByCompanyAndYear(@Param("companyId") String companyId, @Param("year") int year);
+
+    /**
+     * 根据企业ID逻辑删除所有报告
+     */
+    @Update("UPDATE report SET deleted = 1 WHERE company_id = #{companyId} AND deleted = 0")
+    int deleteByCompanyId(@Param("companyId") String companyId);
 }

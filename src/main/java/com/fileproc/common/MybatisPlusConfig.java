@@ -26,7 +26,11 @@ public class MybatisPlusConfig {
             "sys_tenant",
             "sys_admin",
             "sys_permission",
-            "sys_role_permission"
+            "sys_role_permission",
+            // 系统级模板表，不绑定租户，全局共享
+            "system_template",
+            "system_module",
+            "system_placeholder"
     );
 
     @Bean

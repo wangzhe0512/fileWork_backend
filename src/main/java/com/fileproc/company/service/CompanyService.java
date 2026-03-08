@@ -11,6 +11,10 @@ import com.fileproc.company.entity.Company;
 import com.fileproc.company.entity.Contact;
 import com.fileproc.company.mapper.CompanyMapper;
 import com.fileproc.company.mapper.ContactMapper;
+import com.fileproc.datafile.mapper.DataFileMapper;
+import com.fileproc.report.mapper.ReportMapper;
+import com.fileproc.template.mapper.CompanyTemplateMapper;
+import com.fileproc.template.mapper.CompanyTemplatePlaceholderMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,6 +32,10 @@ public class CompanyService {
 
     private final CompanyMapper companyMapper;
     private final ContactMapper contactMapper;
+    private final DataFileMapper dataFileMapper;
+    private final CompanyTemplateMapper companyTemplateMapper;
+    private final CompanyTemplatePlaceholderMapper companyTemplatePlaceholderMapper;
+    private final ReportMapper reportMapper;
 
     /** 分页查询企业列表 */
     public PageResult<Company> pageList(int page, int pageSize, String keyword) {
@@ -111,12 +119,31 @@ public class CompanyService {
         return getById(id);
     }
 
-    /** 删除企业（级联删除联系人，先删子表再删主表） */
+    /** 删除企业（级联删除关联数据：数据文件、子模板、占位符、报告、联系人） */
     @OperationLog(module = "企业档案", action = "删除企业")
     @Transactional(rollbackFor = Exception.class)
     public void deleteCompany(String id) {
         if (companyMapper.selectById(id) == null) throw BizException.notFound("企业");
+
+        // 1. 删除数据文件
+        dataFileMapper.deleteByCompanyId(id);
+
+        // 2. 先查询该企业所有子模板ID，删除占位符状态
+        List<String> templateIds = companyTemplateMapper.selectIdsByCompanyId(id);
+        if (!templateIds.isEmpty()) {
+            companyTemplatePlaceholderMapper.deleteByTemplateIds(templateIds);
+        }
+
+        // 3. 删除企业子模板
+        companyTemplateMapper.deleteByCompanyId(id);
+
+        // 4. 删除报告
+        reportMapper.deleteByCompanyId(id);
+
+        // 5. 删除联系人
         contactMapper.deleteByCompanyId(id);
+
+        // 6. 删除企业主表
         companyMapper.deleteById(id);
     }
 

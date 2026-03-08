@@ -5,6 +5,7 @@ import com.fileproc.datafile.entity.DataFile;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
 
@@ -28,4 +29,10 @@ public interface DataFileMapper extends BaseMapper<DataFile> {
      */
     @Select("SELECT file_path FROM data_file WHERE id = #{id} AND deleted = 0")
     String selectFilePathById(@Param("id") String id);
+
+    /**
+     * 根据企业ID逻辑删除所有数据文件
+     */
+    @Update("UPDATE data_file SET deleted = 1 WHERE company_id = #{companyId} AND deleted = 0")
+    int deleteByCompanyId(@Param("companyId") String companyId);
 }
