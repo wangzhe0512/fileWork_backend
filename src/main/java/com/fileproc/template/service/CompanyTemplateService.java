@@ -359,6 +359,8 @@ public class CompanyTemplateService {
     public CompanyTemplate saveReverseResult(String tenantId, String companyId, String systemTemplateId,
                                               String name, int year, String sourceReportId,
                                               String filePath, long fileSizeBytes) {
+        LocalDateTime now = LocalDateTime.now();
+
         CompanyTemplate template = new CompanyTemplate();
         template.setId(UUID.randomUUID().toString());
         template.setTenantId(tenantId);
@@ -370,7 +372,8 @@ public class CompanyTemplateService {
         template.setFilePath(filePath);
         template.setFileSize(FileUtil.formatSize(fileSizeBytes));
         template.setStatus("active");
-        template.setCreatedAt(LocalDateTime.now());
+        template.setCreatedAt(now);
+        template.setUpdatedAt(now);
         template.setDeleted(0);
         companyTemplateMapper.insert(template);
 
