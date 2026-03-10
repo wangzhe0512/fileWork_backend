@@ -15,13 +15,15 @@ import java.util.List;
  * 系统标准模板管理接口
  * <p>
  * 接口列表（context-path=/api，以下为相对路径）：
- * POST /admin/system-template/init          — 上传三件套并解析初始化
- * GET  /admin/system-template/active        — 获取当前激活模板详情
- * GET  /admin/system-template/placeholders  — 占位符规则列表
- * GET  /admin/system-template/modules       — 模块列表
- * GET  /admin/system-template/list          — 获取所有模板列表
- * GET  /admin/system-template/{id}          — 获取模板详情
- * POST /admin/system-template/{id}/set-active — 设置激活模板
+ * POST /admin/system-template/init              — 上传三件套并解析初始化
+ * GET  /admin/system-template/active            — 获取当前激活模板详情
+ * GET  /admin/system-template/placeholders      — 占位符规则列表
+ * GET  /admin/system-template/modules           — 模块列表
+ * GET  /admin/system-template/list              — 获取所有模板列表
+ * GET  /admin/system-template/{id}              — 获取模板详情
+ * POST /admin/system-template/{id}/set-active   — 设置激活模板
+ * POST /admin/system-template/{id}/reparse      — 重新解析模板（刷新模块/占位符数据）
+ * DELETE /admin/system-template/{id}            — 删除模板
  * </p>
  */
 @RestController
@@ -125,5 +127,25 @@ public class SystemTemplateController {
     public R<SystemTemplate> setActive(@PathVariable String id) {
         SystemTemplate template = systemTemplateService.setActive(id);
         return R.ok("设置激活模板成功", template);
+    }
+
+    /**
+     * 重新解析指定模板的 Word 文件，刷新模块和占位符数据
+     * 适用于占位符格式变更后补全已存在模板的解析结果，无需重新上传文件
+     */
+    @PostMapping("/{id}/reparse")
+    public R<String> reparse(@PathVariable String id) {
+        systemTemplateService.reparseById(id);
+        return R.ok("重新解析成功");
+    }
+
+    /**
+     * 删除指定模板（逻辑删除）
+     * 只能删除状态为 inactive 的模板
+     */
+    @DeleteMapping("/{id}")
+    public R<String> delete(@PathVariable String id) {
+        systemTemplateService.delete(id);
+        return R.ok("删除模板成功");
     }
 }

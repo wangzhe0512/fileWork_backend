@@ -239,6 +239,79 @@ public class SystemTemplateService {
         return systemPlaceholderMapper.selectByTemplateIdAndModuleCode(systemTemplateId, module.getCode());
     }
 
+    /**
+     * 重新解析指定模板的 Word 文件，刷新 system_module 和 system_placeholder 数据
+     * 适用于占位符格式变更后补全已存在模板的解析结果
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void reparseById(String id) {
+        // 1. 获取含文件路径的模板
+        SystemTemplate template = systemTemplateMapper.selectByIdWithPaths(id);
+        if (template == null) {
+            throw BizException.of(404, "模板不存在：" + id);
+        }
+
+        String wordAbsPath = toAbsPath(template.getWordFilePath());
+
+        // 2. 清除旧的模块和占位符数据
+        systemModuleMapper.deleteByTemplateId(id);
+        systemPlaceholderMapper.deleteByTemplateId(id);
+        log.info("[SystemTemplateService] 已清除旧解析数据，templateId={}", id);
+
+        // 3. 重新解析 Word 模板
+        List<SystemPlaceholder> placeholders;
+        try {
+            placeholders = systemTemplateParser.parseWordTemplate(wordAbsPath, id);
+        } catch (Exception e) {
+            throw BizException.of("重新解析Word模板失败：" + e.getMessage());
+        }
+
+        // 4. 生成模块列表
+        List<SystemModule> modules = systemTemplateParser.buildModules(placeholders, id);
+
+        // 5. 批量写入
+        if (!modules.isEmpty()) {
+            modules.forEach(m -> {
+                m.setId(UUID.randomUUID().toString());
+                m.setDeleted(0);
+                systemModuleMapper.insert(m);
+            });
+        }
+        if (!placeholders.isEmpty()) {
+            placeholders.forEach(ph -> {
+                ph.setId(UUID.randomUUID().toString());
+                ph.setDeleted(0);
+                systemPlaceholderMapper.insert(ph);
+            });
+        }
+
+        log.info("[SystemTemplateService] 重新解析完成：id={}, 占位符数={}, 模块数={}",
+                id, placeholders.size(), modules.size());
+    }
+
+    /**
+     * 删除指定模板（逻辑删除）
+     * 只能删除状态为 inactive 的模板
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void delete(String id) {
+        // 1. 验证模板存在
+        SystemTemplate template = systemTemplateMapper.selectById(id);
+        if (template == null) {
+            throw BizException.of(404, "模板不存在：" + id);
+        }
+
+        // 2. 检查是否为激活状态
+        if ("active".equals(template.getStatus())) {
+            throw BizException.of(400, "不能删除当前激活的模板，请先切换其他模板为激活状态");
+        }
+
+        // 3. 逻辑删除（MyBatis-Plus @TableLogic 会自动处理）
+        systemTemplateMapper.deleteById(id);
+
+        log.info("[SystemTemplateService] 已删除模板：id={}, name={}", id, template.getName());
+    }
+
     // ========== 私有方法 ==========
 
     private void validateFiles(MultipartFile wordFile, MultipartFile listFile, MultipartFile bvdFile) {

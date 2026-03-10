@@ -40,6 +40,14 @@ public class Report {
     @TableField(select = false)
     private String filePath;
 
+    /** 清单数据Excel文件路径 */
+    @TableField(select = false)
+    private String listFilePath;
+
+    /** BVD数据Excel文件路径 */
+    @TableField(select = false)
+    private String bvdFilePath;
+
     private String fileSize;
 
     private LocalDateTime createdAt;

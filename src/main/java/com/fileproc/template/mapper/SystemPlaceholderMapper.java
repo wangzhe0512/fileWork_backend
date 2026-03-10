@@ -2,6 +2,7 @@ package com.fileproc.template.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.fileproc.template.entity.SystemPlaceholder;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -45,4 +46,10 @@ public interface SystemPlaceholderMapper extends BaseMapper<SystemPlaceholder> {
             "ORDER BY sort ASC")
     List<SystemPlaceholder> selectByTemplateIdAndModuleCode(@Param("systemTemplateId") String systemTemplateId,
                                                              @Param("moduleCode") String moduleCode);
+
+    /**
+     * 物理删除指定系统模板下的所有占位符（重新解析时使用）
+     */
+    @Delete("DELETE FROM system_placeholder WHERE system_template_id = #{systemTemplateId}")
+    int deleteByTemplateId(@Param("systemTemplateId") String systemTemplateId);
 }

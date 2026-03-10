@@ -17,6 +17,18 @@ public interface ReportMapper extends BaseMapper<Report> {
     String selectFilePathById(@Param("id") String id);
 
     /**
+     * 按 ID 查询 list_file_path（绕过 @TableField(select=false)）
+     */
+    @Select("SELECT list_file_path FROM report WHERE id = #{id} AND deleted = 0")
+    String selectListFilePathById(@Param("id") String id);
+
+    /**
+     * 按 ID 查询 bvd_file_path（绕过 @TableField(select=false)）
+     */
+    @Select("SELECT bvd_file_path FROM report WHERE id = #{id} AND deleted = 0")
+    String selectBvdFilePathById(@Param("id") String id);
+
+    /**
      * P1：统计指定 companyId+year 下 editing 状态的报告数量
      * （用于删除模板前关联检查：若有编辑中报告则不允许删除该模板）
      */

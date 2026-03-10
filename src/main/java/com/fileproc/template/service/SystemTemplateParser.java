@@ -21,7 +21,8 @@ import java.util.regex.Pattern;
  * 系统标准模板解析器
  * <p>
  * 负责：
- * 1. 扫描标准Word模板，提取所有 {{数据源-Sheet名-单元格}} 格式的占位符
+ * 1. 扫描标准Word模板，提取所有 【数据源-Sheet名单元格】 格式的占位符
+ *    例如：【清单模板-数据表B4】
  * 2. 扫描Excel模板的Sheet结构（列头映射）
  * 3. 按占位符数据源前缀分组生成模块列表
  * </p>
@@ -31,18 +32,25 @@ import java.util.regex.Pattern;
 public class SystemTemplateParser {
 
     /**
-     * 占位符正则：匹配 {{清单模板-数据表-B3}} 格式
-     * 三段式：数据源-Sheet名-单元格地址
+     * 占位符正则：匹配 【清单模板-数据表B4】 格式（中文方括号）
+     * 要求：
+     * 1. 内容中必须包含至少一个 -
+     * 2. 以字母+数字结尾（单元格地址）
+     * 3. 内容长度限制 2-50 字符（防止匹配到长段落）
+     * 4. 数据源部分只能是中文、字母、数字（不能包含标点或长文本）
+     * 格式：【数据源-Sheet名+单元格地址】，如 【清单模板-数据表B4】
      */
     private static final Pattern PLACEHOLDER_PATTERN =
-            Pattern.compile("\\{\\{([^}]+)\\}\\}");
+            Pattern.compile("【([\\u4e00-\u9fa5A-Za-z0-9]+-[\\u4e00-\u9fa5A-Za-z0-9]+[A-Za-z]\\d{1,4})】");
 
     /**
-     * 占位符名称拆分正则：名称-Sheet-单元格
-     * 单元格格式：字母(列)+数字(行)，如 B3、AA10
+     * 占位符名称拆分正则：数据源-Sheet名+单元格地址
+     * 第一段：数据源（如 清单模板）
+     * 第二段（非贪婪）：Sheet 名（如 数据表）
+     * 第三段：单元格地址，字母+数字（如 B4、AA10）
      */
     private static final Pattern PLACEHOLDER_NAME_PATTERN =
-            Pattern.compile("^([^-]+)-([^-]+)-([A-Za-z]+\\d+)$");
+            Pattern.compile("^([^-]+)-(.*?)([A-Za-z]+\\d+)$");
 
     /**
      * 解析Word模板，提取所有占位符规则
@@ -121,6 +129,13 @@ public class SystemTemplateParser {
         Matcher matcher = PLACEHOLDER_PATTERN.matcher(text);
         while (matcher.find()) {
             String placeholderName = matcher.group(1).trim();
+
+            // 过滤：名称必须符合占位符格式（数据源-Sheet名+单元格地址）
+            if (!PLACEHOLDER_NAME_PATTERN.matcher(placeholderName).matches()) {
+                log.debug("[SystemTemplateParser] 跳过非占位符内容: {}", placeholderName);
+                continue;
+            }
+
             if (seenNames.contains(placeholderName)) continue;
             seenNames.add(placeholderName);
 
@@ -132,7 +147,7 @@ public class SystemTemplateParser {
 
     /**
      * 根据占位符名称构建 SystemPlaceholder 对象
-     * 格式：数据源-Sheet名-单元格，如 清单模板-数据表-B3
+     * 格式：数据源-Sheet名+单元格，如 清单模板-数据表B4
      */
     private SystemPlaceholder buildPlaceholder(String name, String systemTemplateId,
                                                 String defaultType, int sort) {
@@ -147,7 +162,7 @@ public class SystemTemplateParser {
         if (m.matches()) {
             String dataSourceRaw = m.group(1).trim();   // 如：清单模板
             String sheetName = m.group(2).trim();        // 如：数据表
-            String cellAddress = m.group(3).trim();      // 如：B3
+            String cellAddress = m.group(3).trim();      // 如：B4
 
             ph.setSourceSheet(sheetName);
             ph.setSourceField(cellAddress);

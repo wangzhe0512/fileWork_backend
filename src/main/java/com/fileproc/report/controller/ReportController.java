@@ -98,12 +98,14 @@ public class ReportController {
     @PostMapping(value = "/upload", consumes = "multipart/form-data")
     public R<Report> upload(
             @RequestPart("file") MultipartFile file,
+            @RequestPart(value = "listFile", required = false) MultipartFile listFile,
+            @RequestPart(value = "bvdFile", required = false) MultipartFile bvdFile,
             @RequestParam String companyId,
             @Min(value = 2000, message = "年度不能早于2000年")
             @Max(value = 2100, message = "年度不能晚于2100年")
             @RequestParam int year,
             @RequestParam(required = false) String name) {
-        return R.ok(reportService.uploadReport(file, companyId, year, name));
+        return R.ok(reportService.uploadReport(file, listFile, bvdFile, companyId, year, name));
     }
 
     @Operation(summary = "删除报告")

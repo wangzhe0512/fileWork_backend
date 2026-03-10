@@ -218,9 +218,14 @@ public class ReportService {
     private static final java.util.Set<String> ALLOWED_REPORT_EXT =
             java.util.Set.of(".doc", ".docx", ".pdf");
 
-    /** 手动上传历史报告 */
+    /** 允许上传的Excel文件扩展名白名单 */
+    private static final java.util.Set<String> ALLOWED_EXCEL_EXT =
+            java.util.Set.of(".xlsx", ".xls");
+
+    /** 手动上传历史报告（支持同时上传清单和BVD数据文件） */
     @OperationLog(module = "报告管理", action = "上传报告")
-    public Report uploadReport(MultipartFile file, String companyId, int year, String name) {
+    public Report uploadReport(MultipartFile file, MultipartFile listFile, MultipartFile bvdFile,
+                               String companyId, int year, String name) {
         String tenantId = TenantContext.getTenantId();
         String originalName = file.getOriginalFilename();
         String ext = (originalName != null && originalName.contains("."))
@@ -229,6 +234,20 @@ public class ReportService {
         // P1：文件类型白名单校验
         if (!ALLOWED_REPORT_EXT.contains(ext)) {
             throw BizException.of("不支持的报告文件类型，仅允许：" + ALLOWED_REPORT_EXT);
+        }
+
+        // 校验Excel文件类型（如果上传了）
+        if (listFile != null && !listFile.isEmpty()) {
+            String listExt = getFileExt(listFile.getOriginalFilename());
+            if (!ALLOWED_EXCEL_EXT.contains(listExt)) {
+                throw BizException.of("清单数据文件类型不正确，仅允许：" + ALLOWED_EXCEL_EXT);
+            }
+        }
+        if (bvdFile != null && !bvdFile.isEmpty()) {
+            String bvdExt = getFileExt(bvdFile.getOriginalFilename());
+            if (!ALLOWED_EXCEL_EXT.contains(bvdExt)) {
+                throw BizException.of("BVD数据文件类型不正确，仅允许：" + ALLOWED_EXCEL_EXT);
+            }
         }
 
         String dateDir = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy"));
@@ -244,6 +263,24 @@ public class ReportService {
             Files.createDirectories(fullDir);
             file.transferTo(fullDir.resolve(fileName));
 
+            // 保存清单数据文件（如果上传了）
+            String listFilePath = null;
+            if (listFile != null && !listFile.isEmpty()) {
+                String listExt = getFileExt(listFile.getOriginalFilename());
+                String listFileName = UUID.randomUUID() + listExt;
+                listFile.transferTo(fullDir.resolve(listFileName));
+                listFilePath = relativePath + listFileName;
+            }
+
+            // 保存BVD数据文件（如果上传了）
+            String bvdFilePath = null;
+            if (bvdFile != null && !bvdFile.isEmpty()) {
+                String bvdExt = getFileExt(bvdFile.getOriginalFilename());
+                String bvdFileName = UUID.randomUUID() + bvdExt;
+                bvdFile.transferTo(fullDir.resolve(bvdFileName));
+                bvdFilePath = relativePath + bvdFileName;
+            }
+
             Report report = new Report();
             report.setId(UUID.randomUUID().toString());
             report.setTenantId(tenantId);
@@ -253,6 +290,8 @@ public class ReportService {
             report.setStatus(ReportStatus.HISTORY.getCode());
             report.setIsManualUpload(true);
             report.setFilePath(relativePath + fileName);
+            report.setListFilePath(listFilePath);
+            report.setBvdFilePath(bvdFilePath);
             report.setFileSize(formatSize(file.getSize()));
             report.setCreatedAt(LocalDateTime.now());
             reportMapper.insert(report);
@@ -260,6 +299,12 @@ public class ReportService {
         } catch (IOException e) {
             throw BizException.of("报告上传失败：" + e.getMessage());
         }
+    }
+
+    /** 获取文件扩展名 */
+    private String getFileExt(String fileName) {
+        if (fileName == null || !fileName.contains(".")) return "";
+        return fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
     }
 
     /** 删除报告（含物理文件） */
