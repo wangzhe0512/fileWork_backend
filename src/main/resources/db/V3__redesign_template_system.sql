@@ -80,10 +80,44 @@ CREATE TABLE IF NOT EXISTS company_template (
 -- ============================================================
 -- 5. 修改 report 表：新增 template_id, generation_status, generation_error
 -- ============================================================
-ALTER TABLE report
-  ADD COLUMN template_id        VARCHAR(36)   DEFAULT NULL COMMENT '关联企业子模板ID（company_template.id）' AFTER company_id,
-  ADD COLUMN generation_status  VARCHAR(16)   DEFAULT NULL COMMENT '生成状态：pending|running|success|failed' AFTER is_manual_upload,
-  ADD COLUMN generation_error   TEXT          DEFAULT NULL COMMENT '生成失败错误信息' AFTER generation_status;
+-- 使用IF NOT EXISTS判断避免重复添加
+SET @exist := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS 
+               WHERE TABLE_NAME = 'report' AND COLUMN_NAME = 'template_id' 
+               AND TABLE_SCHEMA = DATABASE());
+SET @sql := IF(@exist = 0, 
+    'ALTER TABLE report ADD COLUMN template_id VARCHAR(36) DEFAULT NULL COMMENT "关联企业子模板ID（company_template.id）" AFTER company_id',
+    'SELECT "Column template_id already exists"');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
--- 为 template_id 添加索引
-ALTER TABLE report ADD KEY idx_template_id (template_id);
+SET @exist := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS 
+               WHERE TABLE_NAME = 'report' AND COLUMN_NAME = 'generation_status' 
+               AND TABLE_SCHEMA = DATABASE());
+SET @sql := IF(@exist = 0, 
+    'ALTER TABLE report ADD COLUMN generation_status VARCHAR(16) DEFAULT NULL COMMENT "生成状态：pending|running|success|failed" AFTER is_manual_upload',
+    'SELECT "Column generation_status already exists"');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @exist := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS 
+               WHERE TABLE_NAME = 'report' AND COLUMN_NAME = 'generation_error' 
+               AND TABLE_SCHEMA = DATABASE());
+SET @sql := IF(@exist = 0, 
+    'ALTER TABLE report ADD COLUMN generation_error TEXT DEFAULT NULL COMMENT "生成失败错误信息" AFTER generation_status',
+    'SELECT "Column generation_error already exists"');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- 为 template_id 添加索引（如果不存在）
+SET @exist := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS 
+               WHERE TABLE_NAME = 'report' AND INDEX_NAME = 'idx_template_id' 
+               AND TABLE_SCHEMA = DATABASE());
+SET @sql := IF(@exist = 0, 
+    'ALTER TABLE report ADD KEY idx_template_id (template_id)',
+    'SELECT "Index idx_template_id already exists"');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;

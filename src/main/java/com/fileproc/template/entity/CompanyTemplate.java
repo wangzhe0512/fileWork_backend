@@ -48,8 +48,12 @@ public class CompanyTemplate {
     /** 状态：active | archived */
     private String status;
 
+    /** 是否为当前使用版本：true-是，false-否（用于生成报告时的默认选择） */
+    private Boolean isCurrent;
+
     /**
      * 获取是否激活状态（用于前端展示）
+     * 注意：active 是生命周期状态，isCurrent 是当前使用状态，两者独立
      */
     public Boolean getIsActive() {
         return "active".equals(status);

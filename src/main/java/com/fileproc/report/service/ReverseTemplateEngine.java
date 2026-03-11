@@ -67,6 +67,14 @@ public class ReverseTemplateEngine {
         /** 用户确认后的类型：text/table/chart/image（前端填写后回传） */
         private String confirmedType;
 
+        // ====== 模块信息（用于反向生成时创建模块） ======
+        /** 所属模块编码（从Sheet名转换） */
+        private String moduleCode;
+        /** 所属模块名称（Sheet原名） */
+        private String moduleName;
+        /** 排序序号 */
+        private int sort;
+
         // ====== 位置信息（用于OnlyOffice精确定位） ======
         /** 段落索引（-1表示不在段落中，如在表格或图表中） */
         private int paragraphIndex = -1;
@@ -95,6 +103,17 @@ public class ReverseTemplateEngine {
             sb.append("}");
             return sb.toString();
         }
+    }
+
+    /** 模块信息（用于反向生成时创建模块记录） */
+    @Data
+    public static class ModuleInfo {
+        /** 模块编码（由Sheet名转换） */
+        private String code;
+        /** 模块名称（Sheet原名） */
+        private String name;
+        /** 排序序号 */
+        private int sort;
     }
 
     // ========== 主方法 ==========
@@ -653,7 +672,87 @@ public class ReverseTemplateEngine {
             item.setLocation(location);
             item.setReason(reason);
             item.setConfirmed(false);
+            // 设置模块信息
+            setModuleInfo(item, phName);
             pendingList.add(item);
         }
+    }
+
+    /**
+     * 从占位符名称提取Sheet名并设置模块信息
+     * <p>
+     * 占位符名称格式：模板名-Sheet名-单元格地址，如 "清单模板-数据表-B3"
+     * Sheet名 → 模块code转换规则：trim() + 空格/横杠转下划线
+     * </p>
+     */
+    private void setModuleInfo(PendingConfirmItem item, String placeholderName) {
+        // 解析占位符名称获取Sheet名
+        String sheetName = extractSheetName(placeholderName);
+        item.setModuleName(sheetName);
+        item.setModuleCode(sheetNameToCode(sheetName));
+    }
+
+    /**
+     * 从占位符名称提取Sheet名
+     * 格式：模板名-Sheet名-单元格地址，如 "清单模板-数据表-B3"
+     */
+    public static String extractSheetName(String placeholderName) {
+        if (placeholderName == null || placeholderName.isBlank()) {
+            return "默认模块";
+        }
+        // 按横杠分割
+        String[] parts = placeholderName.split("-");
+        if (parts.length >= 2) {
+            // 返回中间部分（Sheet名）
+            return parts[1].trim();
+        }
+        // 无法解析时返回默认值
+        return "默认模块";
+    }
+
+    /**
+     * Sheet名转换为模块code
+     * 规则：trim() + 空格/横杠转下划线
+     * 示例："基本 信息" → "基本_信息"，"基本--信息" → "基本_信息"
+     */
+    public static String sheetNameToCode(String sheetName) {
+        if (sheetName == null || sheetName.isBlank()) {
+            return "default";
+        }
+        String code = sheetName.trim()
+                .replaceAll("[\\s\\-]+", "_")  // 连续空格/横杠 → 单个下划线
+                .replaceAll("_+", "_")           // 多个下划线 → 单个下划线
+                .toLowerCase();
+        return code.isEmpty() ? "default" : code;
+    }
+
+    /**
+     * 从占位符列表提取模块信息
+     * <p>
+     * 用于反向生成时创建模块记录
+     * </p>
+     *
+     * @param placeholderNames 占位符名称列表
+     * @return 去重后的模块信息列表
+     */
+    public static List<ModuleInfo> extractModules(List<String> placeholderNames) {
+        Map<String, ModuleInfo> moduleMap = new LinkedHashMap<>();
+        int sort = 0;
+
+        for (String phName : placeholderNames) {
+            String sheetName = extractSheetName(phName);
+            String code = sheetNameToCode(sheetName);
+
+            // 相同code的模块只保留一个
+            if (!moduleMap.containsKey(code)) {
+                ModuleInfo module = new ModuleInfo();
+                module.setCode(code);
+                module.setName(sheetName);
+                module.setSort(sort++);
+                moduleMap.put(code, module);
+            }
+        }
+
+        return new ArrayList<>(moduleMap.values());
     }
 }

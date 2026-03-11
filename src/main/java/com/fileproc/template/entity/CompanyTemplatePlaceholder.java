@@ -2,6 +2,7 @@ package com.fileproc.template.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
@@ -26,7 +27,33 @@ public class CompanyTemplatePlaceholder {
     /** 子模板ID */
     private String companyTemplateId;
 
-    /** 占位符名称 */
+    /** 所属模块ID */
+    private String moduleId;
+
+    /** 占位符显示名称 */
+    private String name;
+
+    /**
+     * 类型：text/table/chart/image/ignore
+     */
+    private String type;
+
+    /** 数据源标识 */
+    private String dataSource;
+
+    /** 来源Sheet名称 */
+    private String sourceSheet;
+
+    /** 来源字段名称 */
+    private String sourceField;
+
+    /** 占位符说明 */
+    private String description;
+
+    /** 排序序号 */
+    private Integer sort;
+
+    /** 占位符名称（原始名称，用于匹配） */
     private String placeholderName;
 
     /**
@@ -58,4 +85,8 @@ public class CompanyTemplatePlaceholder {
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;
+
+    /** 逻辑删除标志：0-未删除，1-已删除 */
+    @TableLogic
+    private Integer deleted;
 }

@@ -28,6 +28,13 @@ spring:
   jackson:
     time-zone: Asia/Shanghai
     date-format: yyyy-MM-dd HH:mm:ss
+  flyway:
+    enabled: true
+    locations: classpath:db
+    baseline-on-migrate: true
+    baseline-version: 0
+    clean-disabled: true
+    validate-on-migrate: true
 
 mybatis-plus:
   configuration:

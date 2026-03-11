@@ -200,9 +200,10 @@ public class CompanyTemplateService {
      * <p>
      * 流程：
      * 1. 使用该子模板 + 对应年度数据生成最终报告
-     * 2. 报告状态设为 HISTORY
-     * 3. 物理删除子模板文件
-     * 4. 逻辑删除子模板记录和占位符状态记录
+     * 2. 将该模板 is_current 设为 false
+     * 3. 将该模板 status 设为 archived
+     * 4. 物理删除子模板文件
+     * 5. 逻辑删除子模板记录和占位符状态记录
      * </p>
      *
      * @param id 子模板ID
@@ -218,13 +219,20 @@ public class CompanyTemplateService {
         // 1. 使用该子模板 + 对应年度数据生成最终报告
         String reportId = generateFinalReport(template);
 
-        // 2. 物理删除子模板文件
+        // 2. 更新模板状态：is_current=false, status=archived
+        template.setIsCurrent(false);
+        template.setStatus("archived");
+        template.setUpdatedAt(LocalDateTime.now());
+        companyTemplateMapper.updateById(template);
+        log.info("[CompanyTemplateService] 子模板状态已更新为归档: templateId={}", id);
+
+        // 3. 物理删除子模板文件
         deleteTemplateFile(template.getFilePath());
 
-        // 3. 删除占位符状态记录
+        // 4. 删除占位符状态记录
         placeholderService.deleteByTemplateId(id);
 
-        // 4. 逻辑删除子模板记录
+        // 5. 逻辑删除子模板记录
         companyTemplateMapper.deleteById(id);
 
         log.info("[CompanyTemplateService] 子模板归档完成: templateId={}, reportId={}", id, reportId);
@@ -352,7 +360,7 @@ public class CompanyTemplateService {
     /**
      * 保存反向生成的子模板记录
      * <p>
-     * 新子模板设为 active，不自动归档旧模板（允许多个 active，前端手动切换）
+     * 新子模板设为 active 且 isCurrent=true，不自动归档旧模板（允许多个 active，前端手动切换）
      * </p>
      */
     @Transactional(rollbackFor = Exception.class)
@@ -372,12 +380,13 @@ public class CompanyTemplateService {
         template.setFilePath(filePath);
         template.setFileSize(FileUtil.formatSize(fileSizeBytes));
         template.setStatus("active");
+        template.setIsCurrent(true);
         template.setCreatedAt(now);
         template.setUpdatedAt(now);
         template.setDeleted(0);
         companyTemplateMapper.insert(template);
 
-        log.info("[CompanyTemplateService] 企业子模板已保存: id={}, company={}, year={}",
+        log.info("[CompanyTemplateService] 企业子模板已保存: id={}, company={}, year={}, isCurrent=true",
                 template.getId(), companyId, year);
 
         // 返回不含 filePath
@@ -388,37 +397,49 @@ public class CompanyTemplateService {
     /**
      * 设为当前使用版本
      * <p>
-     * 将指定子模板设为 active，同时将该企业其他子模板设为 archived
+     * 将指定子模板设为 isCurrent=true，同时将该企业同一年度的其他子模板 isCurrent 设为 false
+     * 注意：此方法只修改 isCurrent 字段，不修改 status 字段（归档操作独立进行）
      * </p>
      */
     @Transactional(rollbackFor = Exception.class)
     public CompanyTemplate setActive(String id) {
-        CompanyTemplate template = getById(id);
-        if ("active".equals(template.getStatus())) {
-            log.info("[CompanyTemplateService] 子模板已是 active 状态: id={}", id);
+        CompanyTemplate template = getByIdWithFilePath(id);
+
+        // 检查模板状态，已归档的模板不能设为当前使用
+        if ("archived".equals(template.getStatus())) {
+            throw BizException.of(400, "已归档的子模板不能设为当前使用");
+        }
+
+        // 如果已经是当前使用，直接返回
+        if (Boolean.TRUE.equals(template.getIsCurrent())) {
+            log.info("[CompanyTemplateService] 子模板已是当前使用版本: id={}", id);
+            template.setFilePath(null);
             return template;
         }
 
         String tenantId = TenantContext.getTenantId();
         String companyId = template.getCompanyId();
+        Integer year = template.getYear();
 
-        // 将该企业其他 active 子模板归档
-        List<CompanyTemplate> existingActive = companyTemplateMapper.selectActiveByCompany(companyId, tenantId);
-        for (CompanyTemplate old : existingActive) {
-            if (!old.getId().equals(id)) {
-                old.setStatus("archived");
-                old.setUpdatedAt(LocalDateTime.now());
-                companyTemplateMapper.updateById(old);
-                log.info("[CompanyTemplateService] 旧子模板已归档: id={}", old.getId());
-            }
+        LocalDateTime now = LocalDateTime.now();
+
+        // 1. 将该企业同一年度的其他子模板 is_current 设为 false
+        int clearedCount = companyTemplateMapper.clearCurrentByCompanyAndYear(companyId, tenantId, year);
+        if (clearedCount > 0) {
+            log.info("[CompanyTemplateService] 同年度其他子模板已取消当前使用: company={}, year={}, count={}",
+                    companyId, year, clearedCount);
         }
 
-        // 将当前子模板设为 active
-        template.setStatus("active");
-        template.setUpdatedAt(LocalDateTime.now());
+        // 2. 将当前子模板设为 isCurrent=true
+        template.setIsCurrent(true);
+        template.setUpdatedAt(now);
         companyTemplateMapper.updateById(template);
 
-        log.info("[CompanyTemplateService] 子模板已设为当前使用版本: id={}", id);
+        log.info("[CompanyTemplateService] 子模板已设为当前使用版本: id={}, company={}, year={}",
+                id, companyId, year);
+
+        // 返回不含 filePath
+        template.setFilePath(null);
         return template;
     }
 

@@ -69,6 +69,12 @@
       <scope>runtime</scope>
     </dependency>
 
+    <!-- Flyway -->
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-mysql</artifactId>
+    </dependency>
+
     <!-- MyBatis-Plus (Spring Boot 3 专用 starter) -->
     <dependency>
       <groupId>com.baomidou</groupId>

@@ -19,6 +19,7 @@ D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\auth\util\Token
 D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\template\service\CompanyTemplatePlaceholderService.java
 D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\notice\mapper\NoticeMapper.java
 D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\template\controller\ModuleController.java
+D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\template\service\CompanyTemplateModuleService.java
 D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\system\service\SysConfigService.java
 D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\auth\config\SecurityConfig.java
 D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\common\PageResult.java
@@ -46,6 +47,7 @@ D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\template\mapper
 D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\common\TenantContext.java
 D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\notice\mapper\NoticeUserMapper.java
 D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\auth\service\AuthService.java
+D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\template\entity\CompanyTemplateModule.java
 D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\auth\util\JwtUtil.java
 D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\report\mapper\ReportMapper.java
 D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\auth\filter\AdminJwtAuthFilter.java
@@ -88,6 +90,7 @@ D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\report\service\
 D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\system\controller\UserController.java
 D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\tenant\entity\SysTenant.java
 D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\system\entity\SysLog.java
+D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\template\mapper\CompanyTemplateModuleMapper.java
 D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\template\service\PlaceholderService.java
 D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\template\entity\Placeholder.java
 D:\wangzhe\CodeBuddy\fileWork_backend\src\main\java\com\fileproc\system\service\LogService.java

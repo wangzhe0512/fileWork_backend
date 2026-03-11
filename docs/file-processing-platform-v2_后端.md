@@ -608,3 +608,220 @@ src/main/resources/db/
 | P0 | Adjust 7：content-url接口确认 | 阻塞前端开发 |
 | P1 | Adjust 8：占位符确认接口调整 | 功能完善 |
 | P1 | Adjust 9：active接口确认 | 功能完善 |
+
+---
+
+## Adjust 10：分离"当前使用"与"归档"状态
+
+### 问题背景
+
+当前 `company_template` 表的 `status` 字段同时承担两种职责：
+1. 生命周期状态：`active`（正常）/ `archived`（已归档）
+2. 当前使用状态：通过 `setActive` 接口将其他模板 `status` 改为 `archived` 来实现
+
+这导致业务逻辑混乱，需要解耦。
+
+### 改造方案
+
+**新增 `is_current` 字段**：
+- `status`：仅表示生命周期状态（`active`/`archived`）
+- `is_current`：布尔值，表示是否为当前使用版本（用于生成报告时的默认选择）
+
+**业务规则**：
+1. **切换当前使用**：`setActive(id)` 只更新 `is_current`，不改变 `status`；切换范围限定在**同一企业同一年度**内
+2. **反向生成默认当前使用**：新反向生成的子模板默认 `is_current=true`（不影响其他年度同企业模板）
+3. **归档独立流程**：归档操作（生成报告 → 删除文件 → `status=archived`）同时将该模板 `is_current=false`，不影响其他模板
+4. **报告生成选模板**：自动选模板时按 `companyId + year + is_current=true` 查询
+
+### 涉及文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `src/main/resources/db/V5__add_is_current.sql` | 新增迁移脚本，添加 `is_current` 字段，默认 `false`；现有 `status=active` 记录中按企业+年度每组最新一条设为 `true` |
+| `CompanyTemplate.java` | 新增 `isCurrent` 字段（`Boolean` 类型） |
+| `CompanyTemplateMapper.java` | 所有自定义 `@Select` SQL 字段列表补充 `is_current`；新增 `selectCurrentByCompanyAndYear` 方法（按 `companyId+tenantId+year+is_current=true` 查询，含 `file_path`） |
+| `CompanyTemplateService.java` | `setActive`：改为只更新 `is_current`，先将同企业同年度其他模板 `is_current=false`，再将目标模板 `is_current=true`，不修改 `status`；`saveReverseResult`：设置 `is_current=true`；`archive`：归档时设置 `is_current=false` |
+| `ReportAsyncService.java` | `asyncGenerateFile` 中自动选模板逻辑从 `selectLatestActiveByCompany` 改为调用 `selectCurrentByCompanyAndYear`（按 `year+is_current=true` 精确匹配） |
+
+---
+
+## 十二、企业子模板模块化管理（本次修改）
+
+### 修改背景
+
+为满足更细粒度的模板管理需求，需要在企业子模板层面引入**模块（Module）**概念，将占位符按业务模块进行分组管理。模块信息从Excel Sheet名称自动提取，实现模板的结构化管理和维护。
+
+### 修改内容
+
+#### 1. 数据库层调整
+
+**新建 `company_template_module` 表**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | VARCHAR(36) | 主键 |
+| `company_template_id` | VARCHAR(36) | 所属子模板ID |
+| `code` | VARCHAR(50) | 模块编码（从Sheet名转换） |
+| `name` | VARCHAR(100) | 模块显示名称（Sheet原名） |
+| `sort` | INT | 排序序号 |
+| `created_at` | DATETIME | 创建时间 |
+
+**扩展 `company_template_placeholder` 表**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `module_id` | VARCHAR(36) | 所属模块ID |
+| `name` | VARCHAR(100) | 占位符显示名称 |
+| `type` | VARCHAR(20) | 类型：text/table/chart/image/ignore |
+| `data_source` | VARCHAR(50) | 数据源：list/bvd |
+| `source_sheet` | VARCHAR(50) | 来源Sheet名 |
+| `source_field` | VARCHAR(50) | 来源字段/单元格 |
+| `description` | TEXT | 描述说明 |
+| `sort` | INT | 排序序号 |
+
+**迁移脚本**：`V6__add_company_template_module.sql`（采用幂等SQL，支持重复执行）
+
+---
+
+#### 2. 代码层实现
+
+**新增实体类**：
+
+| 文件 | 说明 |
+|------|------|
+| `CompanyTemplateModule.java` | 模块实体类 |
+| `CompanyTemplatePlaceholder.java` | 扩展后的占位符实体类 |
+
+**新增 Mapper 接口**：
+
+| 文件 | 说明 |
+|------|------|
+| `CompanyTemplateModuleMapper.java` | 模块数据访问层 |
+| `CompanyTemplatePlaceholderMapper.java` | 占位符数据访问层 |
+
+**新增 Service 层**：
+
+| 文件 | 说明 |
+|------|------|
+| `CompanyTemplateModuleService.java` | 模块管理业务逻辑 |
+| `CompanyTemplatePlaceholderService.java` | 占位符管理业务逻辑 |
+
+---
+
+#### 3. 反向生成引擎改造
+
+**`ReverseTemplateEngine.java` 增强**：
+
+- **新增 `ModuleInfo` 内部类**：用于存储提取的模块信息（code, name, sort）
+- **Sheet名 → 模块编码转换规则**：
+  ```java
+  sheetName.trim().replaceAll("[\\s\\-]+", "_").replaceAll("_+", "_").toLowerCase()
+  ```
+  例如："基本 信息" → "基本_信息"
+- **模块提取逻辑**：`extractModules(List<String>)` 从占位符前缀去重提取模块列表
+- **占位符同步**：反向生成时自动创建模块和占位符记录
+
+---
+
+#### 4. Controller 新增接口
+
+**`CompanyTemplateController.java` 新增 4 个接口**：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/company-template/{templateId}/modules` | 获取子模板模块列表 |
+| GET | `/api/company-template/{templateId}/modules/{moduleId}/placeholders` | 获取模块下的占位符列表 |
+| PUT | `/api/company-template/{templateId}/placeholders/{placeholderId}` | 更新单个占位符信息 |
+| POST | `/api/company-template/sync-placeholders` | 批量同步占位符（从已有数据重新提取） |
+
+**请求/响应示例**：
+
+```json
+// GET /modules 响应
+{
+  "code": 0,
+  "data": [
+    {
+      "id": "module-001",
+      "code": "基本信息",
+      "name": "基本信息",
+      "sort": 1,
+      "placeholderCount": 15
+    }
+  ]
+}
+
+// PUT /placeholders/{id} 请求
+{
+  "name": "企业名称",
+  "type": "text",
+  "dataSource": "list",
+  "sourceSheet": "基本信息",
+  "sourceField": "B3",
+  "description": "企业注册名称"
+}
+
+// POST /sync-placeholders 请求
+{
+  "templateId": "template-001"
+}
+```
+
+---
+
+#### 5. Flyway 数据库迁移配置
+
+**依赖配置**（`pom.xml`）：
+```xml
+<dependency>
+    <groupId>org.flywaydb</groupId>
+    <artifactId>flyway-mysql</artifactId>
+</dependency>
+```
+
+**配置文件**（`application.yml`）：
+```yaml
+flyway:
+  enabled: true
+  locations: classpath:db
+  baseline-on-migrate: true
+  validate-on-migrate: true
+```
+
+**迁移脚本清单**：
+
+| 版本 | 文件 | 说明 |
+|------|------|------|
+| V1 | `V1__init.sql` | 初始建表 |
+| V2 | `V2__update.sql` | 字段调整 |
+| V3 | `V3__redesign_template_system.sql` | 模板系统重新设计 |
+| V4 | `V4__add_company_template_placeholder.sql` | 占位符表 |
+| V5 | `V5__add_is_current.sql` | 添加is_current字段 |
+| V6 | `V6__add_company_template_module.sql` | 模块表及占位符表扩展 |
+
+---
+
+### 涉及文件清单
+
+| 类型 | 文件路径 |
+|------|----------|
+| **新增** | `src/main/java/com/fileproc/template/entity/CompanyTemplateModule.java` |
+| **新增** | `src/main/java/com/fileproc/template/entity/CompanyTemplatePlaceholder.java` |
+| **新增** | `src/main/java/com/fileproc/template/mapper/CompanyTemplateModuleMapper.java` |
+| **新增** | `src/main/java/com/fileproc/template/mapper/CompanyTemplatePlaceholderMapper.java` |
+| **新增** | `src/main/java/com/fileproc/template/service/CompanyTemplateModuleService.java` |
+| **新增** | `src/main/java/com/fileproc/template/service/CompanyTemplatePlaceholderService.java` |
+| **新增** | `src/main/resources/db/V6__add_company_template_module.sql` |
+| **修改** | `src/main/java/com/fileproc/report/service/ReverseTemplateEngine.java` |
+| **修改** | `src/main/java/com/fileproc/template/controller/CompanyTemplateController.java` |
+| **修改** | `pom.xml` — 添加 flyway-mysql 依赖 |
+| **修改** | `src/main/resources/application.yml` — 添加 Flyway 配置 |
+
+---
+
+### 关键技术点
+
+1. **幂等SQL设计**：使用 `INFORMATION_SCHEMA` 查询 + `PREPARE/EXECUTE` 动态执行，确保迁移脚本可重复执行
+2. **模块编码生成**：标准化 Sheet 名称为模块编码（去空格、横杠转下划线、小写化）
+3. **占位符匹配规则**：按 `module.code + placeholder_name` 唯一标识进行同步匹配
+4. **批量同步逻辑**：清空旧数据 → 重新解析提取 → 批量插入新数据

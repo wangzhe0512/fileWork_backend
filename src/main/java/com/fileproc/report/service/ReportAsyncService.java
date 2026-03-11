@@ -88,7 +88,8 @@ public class ReportAsyncService {
             companyTemplate = companyTemplateMapper.selectByIdWithFilePath(companyTemplateId);
         }
         if (companyTemplate == null) {
-            companyTemplate = companyTemplateMapper.selectLatestActiveByCompany(companyId, tenantId);
+            // 按 year + isCurrent=true 查询当前使用模板（不再按最新active查询）
+            companyTemplate = companyTemplateMapper.selectCurrentByCompanyAndYear(companyId, tenantId, year);
         }
 
         if (companyTemplate != null && companyTemplate.getFilePath() != null) {

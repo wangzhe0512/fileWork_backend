@@ -9,11 +9,15 @@ import com.fileproc.datafile.entity.DataFile;
 import com.fileproc.datafile.mapper.DataFileMapper;
 import com.fileproc.report.service.ReverseTemplateEngine;
 import com.fileproc.template.entity.CompanyTemplate;
+import com.fileproc.template.entity.CompanyTemplateModule;
+import com.fileproc.template.entity.CompanyTemplatePlaceholder;
 import com.fileproc.template.entity.SystemPlaceholder;
 import com.fileproc.template.entity.SystemTemplate;
+import com.fileproc.template.service.CompanyTemplateModuleService;
 import com.fileproc.template.service.CompanyTemplatePlaceholderService;
 import com.fileproc.template.service.CompanyTemplateService;
 import com.fileproc.template.service.SystemTemplateService;
+import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -30,6 +34,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -59,6 +66,7 @@ public class CompanyTemplateController {
 
     private final CompanyTemplateService companyTemplateService;
     private final CompanyTemplatePlaceholderService placeholderService;
+    private final CompanyTemplateModuleService moduleService;
     private final SystemTemplateService systemTemplateService;
     private final ReverseTemplateEngine reverseTemplateEngine;
     private final DataFileMapper dataFileMapper;
@@ -147,10 +155,8 @@ public class CompanyTemplateController {
                 templateName, year, sourceReportId, outRelPath, fileSize
         );
 
-        // 初始化占位符状态记录（用于后续确认流程）
-        if (!result.getPendingConfirmList().isEmpty()) {
-            placeholderService.initPlaceholders(companyTemplate.getId(), result.getPendingConfirmList());
-        }
+        // 初始化模块和占位符记录（用于后续确认流程）
+        initModulesAndPlaceholders(companyTemplate.getId(), result);
 
         // 清理临时文件
         cleanTempDir(tmpDir);
@@ -160,6 +166,75 @@ public class CompanyTemplateController {
                 "matchedCount", result.getMatchedCount(),
                 "pendingConfirmList", result.getPendingConfirmList()
         ));
+    }
+
+    /**
+     * 初始化模块和占位符记录
+     * <p>
+     * 1. 从占位符列表提取模块信息并创建模块记录
+     * 2. 创建占位符记录并关联到模块
+     * </p>
+     */
+    private void initModulesAndPlaceholders(String templateId,
+                                             ReverseTemplateEngine.ReverseResult result) {
+        if (result.getPendingConfirmList().isEmpty()) {
+            return;
+        }
+
+        // 1. 提取并创建模块
+        List<String> placeholderNames = result.getPendingConfirmList().stream()
+                .map(ReverseTemplateEngine.PendingConfirmItem::getPlaceholderName)
+                .toList();
+
+        List<ReverseTemplateEngine.ModuleInfo> moduleInfos =
+                ReverseTemplateEngine.extractModules(placeholderNames);
+
+        // 2. 创建模块记录并建立code到moduleId的映射
+        Map<String, String> codeToModuleId = new HashMap<>();
+        int sort = 0;
+        for (ReverseTemplateEngine.ModuleInfo info : moduleInfos) {
+            CompanyTemplateModule module = moduleService.getOrCreate(
+                    templateId, info.getCode(), info.getName(), sort++);
+            codeToModuleId.put(info.getCode(), module.getId());
+        }
+
+        // 3. 创建占位符记录
+        List<CompanyTemplatePlaceholder> placeholders = new ArrayList<>();
+        int phSort = 0;
+        for (ReverseTemplateEngine.PendingConfirmItem item : result.getPendingConfirmList()) {
+            String moduleCode = item.getModuleCode();
+            String moduleId = codeToModuleId.get(moduleCode);
+
+            if (moduleId == null) {
+                log.warn("[CompanyTemplateController] 模块未找到: code={}, placeholder={}",
+                        moduleCode, item.getPlaceholderName());
+                continue;
+            }
+
+            CompanyTemplatePlaceholder ph = new CompanyTemplatePlaceholder();
+            ph.setId(UUID.randomUUID().toString());
+            ph.setCompanyTemplateId(templateId);
+            ph.setModuleId(moduleId);
+            ph.setPlaceholderName(item.getPlaceholderName());
+            ph.setName(item.getPlaceholderName()); // 默认name与placeholderName相同
+            ph.setStatus("uncertain");
+            ph.setExpectedValue(item.getExpectedValue());
+            ph.setActualValue(item.getActualValue());
+            ph.setReason(item.getReason());
+            ph.setPositionJson(item.getPositionJson());
+            ph.setSort(phSort++);
+            ph.setCreatedAt(LocalDateTime.now());
+            ph.setUpdatedAt(LocalDateTime.now());
+            placeholders.add(ph);
+        }
+
+        // 4. 批量保存占位符
+        for (CompanyTemplatePlaceholder ph : placeholders) {
+            placeholderService.savePlaceholder(ph);
+        }
+
+        log.info("[CompanyTemplateController] 模块和占位符已初始化: templateId={}, modules={}, placeholders={}",
+                templateId, moduleInfos.size(), placeholders.size());
     }
 
     /**
@@ -377,6 +452,85 @@ public class CompanyTemplateController {
     public R<Void> delete(@PathVariable String id) {
         companyTemplateService.delete(id);
         return R.ok();
+    }
+
+    // ========== 企业子模板模块管理接口 ==========
+
+    /**
+     * 获取子模板的模块列表
+     * <p>
+     * 返回按sort和created_at排序的模块列表
+     * </p>
+     */
+    @GetMapping("/{templateId}/modules")
+    public R<List<CompanyTemplateModule>> listModules(@PathVariable String templateId) {
+        // 校验权限
+        companyTemplateService.getById(templateId);
+        List<CompanyTemplateModule> modules = moduleService.listByTemplateId(templateId);
+        return R.ok(modules);
+    }
+
+    /**
+     * 获取模块的占位符列表
+     * <p>
+     * 返回指定模块下的所有占位符，按sort和created_at排序
+     * </p>
+     */
+    @GetMapping("/{templateId}/modules/{moduleId}/placeholders")
+    public R<List<CompanyTemplatePlaceholder>> listPlaceholdersByModule(
+            @PathVariable String templateId,
+            @PathVariable String moduleId) {
+        // 校验权限并验证模块归属
+        companyTemplateService.getById(templateId);
+        List<CompanyTemplatePlaceholder> placeholders = placeholderService.listByModuleIdAndTemplateId(moduleId, templateId);
+        return R.ok(placeholders);
+    }
+
+    /**
+     * 更新占位符信息
+     * <p>
+     * 支持更新：name(显示名称)、type(类型)、dataSource(数据源)、
+     * sourceSheet(来源Sheet)、sourceField(来源字段)、description(说明)、sort(排序)
+     * </p>
+     */
+    @PutMapping("/{templateId}/placeholders/{placeholderId}")
+    public R<CompanyTemplatePlaceholder> updatePlaceholder(
+            @PathVariable String templateId,
+            @PathVariable String placeholderId,
+            @RequestBody CompanyTemplatePlaceholderService.PlaceholderUpdateRequest request) {
+        // 校验权限并验证占位符归属
+        companyTemplateService.getById(templateId);
+        CompanyTemplatePlaceholder updated = placeholderService.updateMetadata(placeholderId, templateId, request);
+        return R.ok("占位符已更新", updated);
+    }
+
+    /**
+     * 批量同步占位符到其他子模板
+     * <p>
+     * 将源子模板的占位符元数据同步到同一企业下的其他子模板。
+     * 按 module.code + placeholder_name 匹配，匹配不到则跳过不报错。
+     * </p>
+     *
+     * @param request 同步请求：{sourceTemplateId, targetTemplateIds, placeholderIds}
+     */
+    @PostMapping("/sync-placeholders")
+    public R<CompanyTemplatePlaceholderService.SyncResult> syncPlaceholders(
+            @RequestBody SyncPlaceholdersRequest request) {
+        CompanyTemplatePlaceholderService.SyncResult result = placeholderService.syncPlaceholders(
+                request.getSourceTemplateId(),
+                request.getTargetTemplateIds(),
+                request.getPlaceholderIds()
+        );
+        return R.ok("同步完成", result);
+    }
+
+    // ========== DTO ==========
+
+    @Data
+    public static class SyncPlaceholdersRequest {
+        private String sourceTemplateId;
+        private List<String> targetTemplateIds;
+        private List<String> placeholderIds;
     }
 
     // ========== 私有方法 ==========
