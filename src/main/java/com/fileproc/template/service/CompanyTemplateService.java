@@ -360,7 +360,8 @@ public class CompanyTemplateService {
     /**
      * 保存反向生成的子模板记录
      * <p>
-     * 新子模板设为 active 且 isCurrent=true，不自动归档旧模板（允许多个 active，前端手动切换）
+     * 新子模板设为 active 且 isCurrent=true，同时将该企业同一年度的其他子模板 isCurrent 设为 false
+     * （允许多个 active，但同一年度只能有一个 isCurrent=true）
      * </p>
      */
     @Transactional(rollbackFor = Exception.class)
@@ -369,6 +370,14 @@ public class CompanyTemplateService {
                                               String filePath, long fileSizeBytes) {
         LocalDateTime now = LocalDateTime.now();
 
+        // 1. 先将该企业同一年度的其他子模板 is_current 设为 false
+        int clearedCount = companyTemplateMapper.clearCurrentByCompanyAndYear(companyId, tenantId, year);
+        if (clearedCount > 0) {
+            log.info("[CompanyTemplateService] 同年度其他子模板已取消当前使用: company={}, year={}, count={}",
+                    companyId, year, clearedCount);
+        }
+
+        // 2. 创建新子模板记录，设为 isCurrent=true
         CompanyTemplate template = new CompanyTemplate();
         template.setId(UUID.randomUUID().toString());
         template.setTenantId(tenantId);
@@ -392,6 +401,18 @@ public class CompanyTemplateService {
         // 返回不含 filePath
         template.setFilePath(null);
         return template;
+    }
+
+    /**
+     * 更新子模板文件大小（异步反向生成完成后调用）
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void updateFileSize(String id, long fileSizeBytes) {
+        CompanyTemplate template = companyTemplateMapper.selectById(id);
+        if (template == null) return;
+        template.setFileSize(FileUtil.formatSize(fileSizeBytes));
+        template.setUpdatedAt(LocalDateTime.now());
+        companyTemplateMapper.updateById(template);
     }
 
     /**

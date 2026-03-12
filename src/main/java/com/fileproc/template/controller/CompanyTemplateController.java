@@ -1,6 +1,6 @@
 package com.fileproc.template.controller;
 
-import com.fileproc.common.BizException;
+import com.fileproc.llm.service.LlmReverseOrchestrator;
 import com.fileproc.common.PageResult;
 import com.fileproc.common.R;
 import com.fileproc.common.TenantContext;
@@ -37,9 +37,14 @@ import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+
+
 
 /**
  * 企业子模板管理接口
@@ -69,16 +74,21 @@ public class CompanyTemplateController {
     private final CompanyTemplateModuleService moduleService;
     private final SystemTemplateService systemTemplateService;
     private final ReverseTemplateEngine reverseTemplateEngine;
+    private final LlmReverseOrchestrator llmReverseOrchestrator;
     private final DataFileMapper dataFileMapper;
 
     @Value("${file.upload-dir:./uploads}")
     private String uploadDir;
 
     /**
-     * 反向生成企业子模板
+     * 反向生成企业子模板（大模型驱动，异步处理）
      * <p>
      * 输入：历史报告Word + 年度（自动查询对应清单Excel + BVD Excel）
-     * 输出：企业子模板（数据替换为占位符，保留排版）+ 待确认占位符列表
+     * 输出（立即返回202）：companyTemplateId + taskId，前端通过 GET /{id}/reverse-status 轮询进度
+     * <p>
+     * 引擎选择：
+     * - Ollama 可用（llm.ollama.enabled=true 且服务健康）→ 大模型语义解析引擎
+     * - Ollama 不可用 → 旧字符串匹配引擎（同步降级，返回200）
      * </p>
      */
     @PostMapping("/reverse-generate")
@@ -93,18 +103,15 @@ public class CompanyTemplateController {
 
         String tenantId = TenantContext.getTenantId();
 
-        // 获取系统标准模板和占位符规则
+        // 获取系统标准模板和占位符规则（降级引擎时使用）
         SystemTemplate systemTemplate = systemTemplateService.getActiveWithPaths();
         List<SystemPlaceholder> placeholders = systemTemplateService.listPlaceholders(systemTemplate.getId());
-        if (placeholders.isEmpty()) {
-            throw BizException.of(400, "系统标准模板尚未解析占位符规则，请重新初始化");
-        }
 
         // 根据年度自动查询清单模板和BVD数据
         List<DataFile> dataFiles = dataFileMapper.selectWithFilePathByCompanyAndYear(companyId, year);
         String listPath = null;
         String bvdPath = null;
-        
+
         for (DataFile dataFile : dataFiles) {
             if ("list".equals(dataFile.getType())) {
                 listPath = dataFile.getFilePath();
@@ -112,8 +119,7 @@ public class CompanyTemplateController {
                 bvdPath = dataFile.getFilePath();
             }
         }
-        
-        // 检查数据是否存在
+
         if (listPath == null || bvdPath == null) {
             throw BizException.of(400, "该年度清单模板或BVD数据缺失，请先到数据管理上传");
         }
@@ -134,80 +140,159 @@ public class CompanyTemplateController {
             throw BizException.of("创建输出目录失败：" + e.getMessage());
         }
 
-        // 执行反向生成
-        ReverseTemplateEngine.ReverseResult result = reverseTemplateEngine.reverse(
-                toAbsPath(histPath),
-                uploadDir + "/" + listPath,
-                uploadDir + "/" + bvdPath,
-                placeholders,
-                outAbsPath
-        );
-
-        // 保存子模板记录到数据库
+        // 提前创建子模板记录（状态为 active，文件大小待更新）
         String templateName = name != null ? name : (year + "年子模板");
-        long fileSize = 0L;
-        try {
-            fileSize = Files.size(Paths.get(outAbsPath));
-        } catch (IOException ignored) {}
-
         CompanyTemplate companyTemplate = companyTemplateService.saveReverseResult(
                 tenantId, companyId, systemTemplate.getId(),
-                templateName, year, sourceReportId, outRelPath, fileSize
+                templateName, year, sourceReportId, outRelPath, 0L
         );
 
-        // 初始化模块和占位符记录（用于后续确认流程）
-        initModulesAndPlaceholders(companyTemplate.getId(), result);
+        // 检查大模型是否可用
+        boolean llmAvailable = llmReverseOrchestrator.isLlmAvailable();
 
-        // 清理临时文件
-        cleanTempDir(tmpDir);
+        if (llmAvailable) {
+            // 大模型引擎：异步处理，立即返回202
+            String taskId = UUID.randomUUID().toString();
+            llmReverseOrchestrator.markProcessing(taskId, companyTemplate.getId());
 
-        return R.ok("反向生成完成", Map.of(
-                "template", companyTemplate,
-                "matchedCount", result.getMatchedCount(),
-                "pendingConfirmList", result.getPendingConfirmList()
-        ));
+            String finalListPath = uploadDir + "/" + listPath;
+            String finalBvdPath = uploadDir + "/" + bvdPath;
+
+            llmReverseOrchestrator.executeAsync(
+                    taskId, companyTemplate, histPath,
+                    finalListPath, finalBvdPath, outAbsPath,
+                    tmpDir, tenantId, placeholders
+            );
+
+            log.info("[CompanyTemplateController] 大模型反向生成任务已提交: templateId={}, taskId={}",
+                    companyTemplate.getId(), taskId);
+
+            return R.ok("反向生成任务已提交，请轮询状态", Map.of(
+                    "companyTemplateId", companyTemplate.getId(),
+                    "taskId", taskId,
+                    "async", true,
+                    "engine", "llm"
+            ));
+        } else {
+            // 新引擎降级：同步处理（不再依赖 SystemPlaceholder 规则列表）
+            ReverseTemplateEngine.ReverseResult result = reverseTemplateEngine.reverse(
+                    toAbsPath(histPath),
+                    uploadDir + "/" + listPath,
+                    uploadDir + "/" + bvdPath,
+                    outAbsPath
+            );
+
+            // 更新文件大小
+            try {
+                long fileSize = Files.size(Paths.get(outAbsPath));
+                companyTemplateService.updateFileSize(companyTemplate.getId(), fileSize);
+            } catch (IOException ignored) {}
+
+            initModulesAndPlaceholders(companyTemplate.getId(), result);
+            cleanTempDir(tmpDir);
+
+            log.info("[CompanyTemplateController] 旧引擎反向生成完成: templateId={}, matched={}",
+                    companyTemplate.getId(), result.getMatchedCount());
+
+            return R.ok("反向生成完成", Map.of(
+                    "template", companyTemplate,
+                    "matchedCount", result.getMatchedCount(),
+                    "pendingConfirmList", result.getPendingConfirmList(),
+                    "unmatchedLongTextEntries", result.getUnmatchedLongTextEntries(),
+                    "async", false,
+                    "engine", "fallback"
+            ));
+        }
     }
 
     /**
-     * 初始化模块和占位符记录
+     * 查询反向生成任务状态（供前端轮询）
      * <p>
-     * 1. 从占位符列表提取模块信息并创建模块记录
-     * 2. 创建占位符记录并关联到模块
+     * 状态值：
+     * - processing:{templateId}    — 任务进行中
+     * - done:{templateId}:matched=N:lowConfidence=M:engine=llm|fallback — 完成
+     * - failed:{errMsg}            — 失败
+     * - null                       — 任务不存在或已过期（2小时）
+     * </p>
+     */
+    @GetMapping("/{id}/reverse-status")
+    public R<Map<String, Object>> getReverseStatus(@PathVariable String id,
+                                                    @RequestParam("taskId") String taskId) {
+        String status = llmReverseOrchestrator.getTaskStatus(taskId);
+
+        if (status == null) {
+            return R.ok(Map.of("status", "not_found", "templateId", id));
+        }
+
+        if (status.startsWith("processing:")) {
+            return R.ok(Map.of("status", "processing", "templateId", id));
+        }
+
+        if (status.startsWith("done:")) {
+            // 解析 done 状态的附带信息
+            Map<String, Object> result = new HashMap<>();
+            result.put("status", "done");
+            result.put("templateId", id);
+            // 从状态字符串中提取 matched/lowConfidence/engine
+            for (String part : status.split(":")) {
+                if (part.startsWith("matched=")) result.put("matchedCount", Integer.parseInt(part.substring(8)));
+                if (part.startsWith("lowConfidence=")) result.put("lowConfidenceCount", Integer.parseInt(part.substring(14)));
+                if (part.startsWith("engine=")) result.put("engine", part.substring(7));
+            }
+            return R.ok(result);
+        }
+
+        if (status.startsWith("failed:")) {
+            return R.fail(500, "反向生成失败：" + status.substring(7));
+        }
+
+        return R.ok(Map.of("status", status, "templateId", id));
+    }
+
+    /**
+     * 初始化模块和占位符记录（新引擎版本）
+     * <p>
+     * 不再依赖 SystemPlaceholder 规则列表，直接从 MatchedPlaceholder 自身字段
+     * （moduleCode / moduleName / dataSource / sourceSheet / sourceField）填充占位符实体。
      * </p>
      */
     private void initModulesAndPlaceholders(String templateId,
                                              ReverseTemplateEngine.ReverseResult result) {
-        if (result.getPendingConfirmList().isEmpty()) {
+        List<ReverseTemplateEngine.MatchedPlaceholder> matchedList = result.getAllMatchedPlaceholders();
+        if (matchedList == null || matchedList.isEmpty()) {
+            log.info("[CompanyTemplateController] 没有匹配到任何占位符，跳过模块初始化: templateId={}", templateId);
             return;
         }
 
-        // 1. 提取并创建模块
-        List<String> placeholderNames = result.getPendingConfirmList().stream()
-                .map(ReverseTemplateEngine.PendingConfirmItem::getPlaceholderName)
-                .toList();
-
-        List<ReverseTemplateEngine.ModuleInfo> moduleInfos =
-                ReverseTemplateEngine.extractModules(placeholderNames);
-
-        // 2. 创建模块记录并建立code到moduleId的映射
-        Map<String, String> codeToModuleId = new HashMap<>();
-        int sort = 0;
-        for (ReverseTemplateEngine.ModuleInfo info : moduleInfos) {
-            CompanyTemplateModule module = moduleService.getOrCreate(
-                    templateId, info.getCode(), info.getName(), sort++);
-            codeToModuleId.put(info.getCode(), module.getId());
+        // 1. 从 matchedList 直接提取模块信息（code -> name），保持出现顺序
+        Map<String, String> moduleCodeToName = new LinkedHashMap<>();
+        for (ReverseTemplateEngine.MatchedPlaceholder matched : matchedList) {
+            moduleCodeToName.put(matched.getModuleCode(), matched.getModuleName());
         }
 
-        // 3. 创建占位符记录
-        List<CompanyTemplatePlaceholder> placeholders = new ArrayList<>();
-        int phSort = 0;
-        for (ReverseTemplateEngine.PendingConfirmItem item : result.getPendingConfirmList()) {
-            String moduleCode = item.getModuleCode();
-            String moduleId = codeToModuleId.get(moduleCode);
+        // 2. 创建模块记录并建立 code → moduleId 的映射
+        Map<String, String> codeToModuleId = new HashMap<>();
+        int sort = 0;
+        for (Map.Entry<String, String> entry : moduleCodeToName.entrySet()) {
+            CompanyTemplateModule module = moduleService.getOrCreate(
+                    templateId, entry.getKey(), entry.getValue(), sort++);
+            codeToModuleId.put(entry.getKey(), module.getId());
+        }
 
+        // 3. 创建占位符记录（按占位符名称去重，同一占位符多次出现只保留一条）
+        List<CompanyTemplatePlaceholder> placeholders = new ArrayList<>();
+        Set<String> processedPhNames = new HashSet<>();
+        int phSort = 0;
+
+        for (ReverseTemplateEngine.MatchedPlaceholder matched : matchedList) {
+            String phName = matched.getPlaceholderName();
+            if (processedPhNames.contains(phName)) continue;
+            processedPhNames.add(phName);
+
+            String moduleCode = matched.getModuleCode();
+            String moduleId = codeToModuleId.get(moduleCode);
             if (moduleId == null) {
-                log.warn("[CompanyTemplateController] 模块未找到: code={}, placeholder={}",
-                        moduleCode, item.getPlaceholderName());
+                log.warn("[CompanyTemplateController] 模块未找到: code={}, placeholder={}", moduleCode, phName);
                 continue;
             }
 
@@ -215,16 +300,22 @@ public class CompanyTemplateController {
             ph.setId(UUID.randomUUID().toString());
             ph.setCompanyTemplateId(templateId);
             ph.setModuleId(moduleId);
-            ph.setPlaceholderName(item.getPlaceholderName());
-            ph.setName(item.getPlaceholderName()); // 默认name与placeholderName相同
-            ph.setStatus("uncertain");
-            ph.setExpectedValue(item.getExpectedValue());
-            ph.setActualValue(item.getActualValue());
-            ph.setReason(item.getReason());
-            ph.setPositionJson(item.getPositionJson());
+            ph.setPlaceholderName(phName);
+            ph.setName(phName); // 直接用占位符名作为显示名（已语义化，如"企业名称"）
+            ph.setStatus(matched.getStatus()); // "confirmed" 或 "uncertain"
+            ph.setExpectedValue(matched.getExpectedValue());
+            ph.setActualValue(matched.getActualValue());
+            ph.setReason("uncertain".equals(matched.getStatus()) ? "短纯数字值，需人工确认" : null);
+            ph.setPositionJson(matched.getPositionJson());
             ph.setSort(phSort++);
             ph.setCreatedAt(LocalDateTime.now());
             ph.setUpdatedAt(LocalDateTime.now());
+            // 直接从 matched 获取来源信息，不再查 systemPhMap
+            ph.setType("text"); // 默认 text 类型（chart/image 本期不处理）
+            ph.setDataSource(matched.getDataSource());
+            ph.setSourceSheet(matched.getSourceSheet());
+            ph.setSourceField(matched.getSourceField());
+
             placeholders.add(ph);
         }
 
@@ -234,7 +325,7 @@ public class CompanyTemplateController {
         }
 
         log.info("[CompanyTemplateController] 模块和占位符已初始化: templateId={}, modules={}, placeholders={}",
-                templateId, moduleInfos.size(), placeholders.size());
+                templateId, moduleCodeToName.size(), placeholders.size());
     }
 
     /**
@@ -350,12 +441,16 @@ public class CompanyTemplateController {
      * 获取子模板的占位符状态列表
      * <p>
      * 返回所有占位符的状态（uncertain/confirmed/ignored）和位置信息
+     * 兼容性处理：如果type为空，使用confirmedType作为fallback
      * </p>
      */
     @GetMapping("/{id}/placeholders")
     public R<Map<String, Object>> getPlaceholders(@PathVariable String id) {
         CompanyTemplate template = companyTemplateService.getById(id);
         List<com.fileproc.template.entity.CompanyTemplatePlaceholder> list = placeholderService.listByTemplateId(id);
+
+        // 兼容性处理：type为空时使用confirmedType
+        list.forEach(this::fillTypeIfEmpty);
 
         // 按状态分组
         List<com.fileproc.template.entity.CompanyTemplatePlaceholder> uncertain = list.stream()
@@ -474,6 +569,7 @@ public class CompanyTemplateController {
      * 获取模块的占位符列表
      * <p>
      * 返回指定模块下的所有占位符，按sort和created_at排序
+     * 兼容性处理：如果type为空，使用confirmedType作为fallback
      * </p>
      */
     @GetMapping("/{templateId}/modules/{moduleId}/placeholders")
@@ -483,6 +579,10 @@ public class CompanyTemplateController {
         // 校验权限并验证模块归属
         companyTemplateService.getById(templateId);
         List<CompanyTemplatePlaceholder> placeholders = placeholderService.listByModuleIdAndTemplateId(moduleId, templateId);
+        
+        // 兼容性处理：type为空时使用confirmedType
+        placeholders.forEach(this::fillTypeIfEmpty);
+        
         return R.ok(placeholders);
     }
 
@@ -580,6 +680,21 @@ public class CompanyTemplateController {
             }
         } catch (IOException e) {
             log.warn("[CompanyTemplateController] 清理临时目录失败: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 兼容性处理：如果type为空，使用confirmedType作为fallback
+     * <p>
+     * 历史数据可能存在type为空的情况，此时使用confirmedType作为显示类型
+     * </p>
+     */
+    private void fillTypeIfEmpty(CompanyTemplatePlaceholder placeholder) {
+        if (placeholder.getType() == null || placeholder.getType().isBlank()) {
+            String confirmedType = placeholder.getConfirmedType();
+            if (confirmedType != null && !confirmedType.isBlank()) {
+                placeholder.setType(confirmedType);
+            }
         }
     }
 }

@@ -825,3 +825,154 @@ flyway:
 2. **模块编码生成**：标准化 Sheet 名称为模块编码（去空格、横杠转下划线、小写化）
 3. **占位符匹配规则**：按 `module.code + placeholder_name` 唯一标识进行同步匹配
 4. **批量同步逻辑**：清空旧数据 → 重新解析提取 → 批量插入新数据
+
+---
+
+## 附录：反向报告生成流程说明
+
+### 正确流程
+
+系统占位符规则（不是正则）：
+```
+├─ 占位符名: "清单模板-数据表-B3"
+├─ 数据源: "list"（清单Excel）
+├─ Sheet: "数据表"
+└─ 单元格: "B3"
+```
+
+↓ 读取清单Excel的"数据表"Sheet，B3单元格
+
+得到实际值："5000万元"
+
+↓ 在历史报告Word中搜索 "5000万元"
+
+找到匹配文本 → 替换为 "{{清单模板-数据表-B3}}"
+
+### 核心逻辑说明
+
+**不是**：用正则从Word中提取内容  
+**而是**：用Excel中的已知值，去Word中查找替换
+
+```
+伪代码：
+1. 从Excel读取（已知）
+   String excelValue = readExcel("清单.xlsx", "数据表", "B3"); // "5000"
+
+2. 在Word中搜索这个值（查找）
+   if (wordText.contains(excelValue)) {
+       // 3. 替换为占位符标记
+       wordText = wordText.replace(excelValue, "{{清单模板-数据表-B3}}");
+   }
+```
+
+### 为什么这样设计？
+
+因为历史报告Word里的值**就是来源于Excel**（当年生成的报告），所以：
+- Excel中的"5000" 应该对应 Word中的"5000"
+- 通过匹配实际值，就能知道Word中的"5000"应该替换成哪个占位符
+
+### 系统模板的作用
+
+系统模板只提供**映射规则**：
+
+| 字段 | 示例值 | 用途 |
+|------|--------|------|
+| `name` | `清单模板-数据表-B3` | 占位符名称 |
+| `dataSource` | `list` | 读哪个Excel（list=清单，bvd=BVD数据） |
+| `sourceSheet` | `数据表` | 读哪个Sheet |
+| `sourceField` | `B3` | 读哪个单元格 |
+
+**没有正则表达式**，就是简单的字符串查找替换。
+
+---
+
+## 附录 C：占位符类型定义
+
+### 类型说明
+
+| 类型 | Word 中位置 | Excel 数据来源 | 数据量 | 替换方式 |
+|------|-------------|----------------|--------|----------|
+| **text** | **段落文本**（正文、页眉页脚） | **按列名取第一行数据** | 单个值 | 直接文本替换 |
+| **table** | **表格单元格** | **整个 Sheet** | 多行多列 | 填充整个表格 |
+| **chart** | Word 内嵌图表对象 | **整个 Sheet** | 多行多列 | 生成文字摘要（TODO：嵌入图表） |
+| **image** | 图片位置 | - | - | 替换图片 |
+
+### 详细说明
+
+#### `text` 类型
+- **Word 位置**：正文段落、页眉、页脚中的文本
+- **Excel 来源**：按 `sourceField`（列标题，如"企业名称"）匹配列，取**第一行数据**的值
+- **代码逻辑**：`extractTextValue(rows, sheetName, sourceField)` → 返回单个字符串
+- **替换方式**：简单文本替换 `{{占位符}}` → `值`
+- **典型场景**：公司名称、日期、金额等单个字段
+- **注意**：不是取单个单元格（如B3），而是按列名匹配取第一行数据
+
+#### `table` 类型
+- **Word 位置**：**表格单元格内**的占位符
+- **Excel 来源**：**整个 Sheet**（多行多列数据，含表头）
+- **代码逻辑**：`extractTableData(rows, sheetName)` → 返回 `List<List<Object>>`
+- **替换方式**：用 Excel 的多行数据**填充 Word 表格**
+- **典型场景**：数据明细表、列表展示
+
+#### `chart` 类型
+- **Word 位置**：Word 内嵌的可编辑图表对象
+- **Excel 来源**：**整个 Sheet**（多行多列数据）
+- **代码逻辑**：`extractTableData(rows, sheetName)` → 生成文字摘要
+- **替换方式**：**当前实现**：生成文字摘要（如"[清单模板-数据表 图表 (bar): 5 行 3 列数据]"）
+- **未来实现**：更新图表数据源，驱动图表重新渲染
+- **图表类型**：支持 `bar`(柱状图)、`line`(折线图)、`pie`(饼图)
+- **典型场景**：数据可视化图表
+
+#### `image` 类型
+- **Word 位置**：图片占位位置
+- **Excel 来源**：无（图片路径或二进制数据）
+- **替换方式**：替换为实际图片
+- **典型场景**：Logo、签名、照片等
+
+### 类型判断规则
+
+系统模板解析时自动判断类型：
+1. **段落**中的占位符 → `text`
+2. **表格单元格**中的占位符 → `table`
+3. **图表对象**中的占位符 → `chart`（需人工标记）
+4. **图片位置**的占位符 → `image`（需人工标记）
+
+### 代码实现差异
+
+```java
+// ReportGenerateEngine.java 中的处理逻辑
+
+if ("text".equals(ph.getType())) {
+    // 按 sourceField（列标题）匹配列，取第一行数据值
+    String value = extractTextValue(rows, ph.getSourceSheet(), ph.getSourceField());
+    textValues.put(ph.getName(), value);
+} else if ("table".equals(ph.getType())) {
+    // 取整个 Sheet 的所有行数据
+    List<List<Object>> tableData = extractTableData(rows, ph.getSourceSheet());
+    tableValues.put(ph.getName(), tableData);
+} else if ("chart".equals(ph.getType())) {
+    // 同样取整个 Sheet，但生成文字摘要
+    List<List<Object>> chartData = extractTableData(rows, ph.getSourceSheet());
+    String summary = buildChartSummary(ph.getName(), ph.getChartType(), chartData);
+    textValues.put(ph.getName(), summary);
+}
+```
+
+### 关键区别
+
+| 维度 | text | table | chart |
+|------|------|-------|-------|
+| Excel 数据范围 | 单列第一行 | 整个 Sheet | 整个 Sheet |
+| Word 替换目标 | 段落文本 | 表格内容 | 图表数据（当前为文字摘要） |
+| sourceField 用途 | 列名匹配 | 未使用 | 未使用 |
+
+### 数据库字段映射
+
+```java
+// SystemPlaceholder.java
+private String type;        // text/table/chart/image
+private String chartType;   // bar/line/pie（type=chart时有效）
+private String dataSource;  // list/bvd
+private String sourceSheet; // Excel Sheet名
+private String sourceField; // 列标题（text类型用于匹配列）
+```

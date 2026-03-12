@@ -19,25 +19,25 @@ public interface CompanyTemplatePlaceholderMapper extends BaseMapper<CompanyTemp
     /**
      * 根据子模板ID查询所有占位符状态
      */
-    @Select("SELECT * FROM company_template_placeholder WHERE company_template_id = #{templateId} ORDER BY created_at")
+    @Select("SELECT * FROM company_template_placeholder WHERE company_template_id = #{templateId} AND deleted = 0 ORDER BY created_at")
     List<CompanyTemplatePlaceholder> selectByTemplateId(@Param("templateId") String templateId);
 
     /**
      * 根据子模板ID和占位符名称查询
      */
-    @Select("SELECT * FROM company_template_placeholder WHERE company_template_id = #{templateId} AND placeholder_name = #{name}")
+    @Select("SELECT * FROM company_template_placeholder WHERE company_template_id = #{templateId} AND placeholder_name = #{name} AND deleted = 0")
     CompanyTemplatePlaceholder selectByTemplateIdAndName(@Param("templateId") String templateId, @Param("name") String name);
 
     /**
      * 根据子模板ID和状态查询
      */
-    @Select("SELECT * FROM company_template_placeholder WHERE company_template_id = #{templateId} AND status = #{status}")
+    @Select("SELECT * FROM company_template_placeholder WHERE company_template_id = #{templateId} AND status = #{status} AND deleted = 0")
     List<CompanyTemplatePlaceholder> selectByTemplateIdAndStatus(@Param("templateId") String templateId, @Param("status") String status);
 
     /**
      * 根据子模板ID和状态统计数量
      */
-    @Select("SELECT COUNT(*) FROM company_template_placeholder WHERE company_template_id = #{templateId} AND status = #{status}")
+    @Select("SELECT COUNT(*) FROM company_template_placeholder WHERE company_template_id = #{templateId} AND status = #{status} AND deleted = 0")
     int countByTemplateIdAndStatus(@Param("templateId") String templateId, @Param("status") String status);
 
     /**
@@ -54,7 +54,7 @@ public interface CompanyTemplatePlaceholderMapper extends BaseMapper<CompanyTemp
      * 根据模块ID查询占位符列表
      */
     @Select("SELECT * FROM company_template_placeholder " +
-            "WHERE module_id = #{moduleId} " +
+            "WHERE module_id = #{moduleId} AND deleted = 0 " +
             "ORDER BY sort ASC, created_at ASC")
     List<CompanyTemplatePlaceholder> selectByModuleId(@Param("moduleId") String moduleId);
 
@@ -63,7 +63,7 @@ public interface CompanyTemplatePlaceholderMapper extends BaseMapper<CompanyTemp
      */
     @Select("SELECT p.*, m.code as module_code FROM company_template_placeholder p " +
             "LEFT JOIN company_template_module m ON p.module_id = m.id " +
-            "WHERE p.company_template_id = #{templateId} " +
+            "WHERE p.company_template_id = #{templateId} AND p.deleted = 0 " +
             "ORDER BY p.sort ASC, p.created_at ASC")
     List<Map<String, Object>> selectWithModuleByTemplateId(@Param("templateId") String templateId);
 
@@ -74,7 +74,8 @@ public interface CompanyTemplatePlaceholderMapper extends BaseMapper<CompanyTemp
             "LEFT JOIN company_template_module m ON p.module_id = m.id " +
             "WHERE p.company_template_id = #{templateId} " +
             "AND m.code = #{moduleCode} " +
-            "AND p.placeholder_name = #{placeholderName}")
+            "AND p.placeholder_name = #{placeholderName} " +
+            "AND p.deleted = 0")
     CompanyTemplatePlaceholder selectByTemplateIdAndModuleCodeAndName(@Param("templateId") String templateId,
                                                                        @Param("moduleCode") String moduleCode,
                                                                        @Param("placeholderName") String placeholderName);

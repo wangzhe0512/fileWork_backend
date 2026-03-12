@@ -81,3 +81,26 @@ springdoc:
 # CORS 跨域白名单（逗号分隔多域名，生产环境在 application-prod.yml 中覆盖）
 cors:
   allowed-origins: http://localhost:5173
+
+# 反向生成引擎配置
+# Sheet类型识别为全自动（按内容识别），无需手动配置白名单
+reverse-engine: {}
+
+# 大模型（Ollama）配置
+# 生产环境可通过环境变量覆盖：LLM_OLLAMA_BASE_URL、LLM_OLLAMA_MODEL 等
+llm:
+  ollama:
+    # Ollama 服务地址（本机部署默认11434端口）
+    base-url: ${LLM_OLLAMA_BASE_URL:http://localhost:11434}
+    # 推荐使用 qwen3:8b（8核16G服务器可运行），备选 qwen2.5:7b
+    model: ${LLM_OLLAMA_MODEL:qwen3:8b}
+    # 是否启用大模型引擎；false 时直接使用旧字符串匹配引擎
+    enabled: ${LLM_OLLAMA_ENABLED:true}
+    # 单次推理超时（秒），CPU推理较慢，建议180~300秒
+    timeout-seconds: ${LLM_OLLAMA_TIMEOUT:180}
+    # 健康检查超时（秒）
+    health-check-timeout-seconds: ${LLM_OLLAMA_HEALTH_TIMEOUT:3}
+    # 置信度阈值：>= 此值为高置信度自动确认，< 此值标记低置信度提示
+    confidence-threshold: ${LLM_OLLAMA_CONFIDENCE_THRESHOLD:0.8}
+    # Word 段落片段最大字符数（超过则强制截断，控制 Prompt 长度）
+    max-segment-chars: ${LLM_OLLAMA_MAX_SEGMENT_CHARS:1500}

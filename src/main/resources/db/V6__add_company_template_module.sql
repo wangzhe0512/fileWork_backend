@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS company_template_module (
     description VARCHAR(500) COMMENT '模块说明',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除标志：0-未删除，1-已删除',
     
     INDEX idx_template_id (company_template_id),
     INDEX idx_code (company_template_id, code),

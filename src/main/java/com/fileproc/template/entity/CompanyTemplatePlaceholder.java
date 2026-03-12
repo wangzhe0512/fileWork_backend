@@ -86,6 +86,14 @@ public class CompanyTemplatePlaceholder {
 
     private LocalDateTime updatedAt;
 
+    /**
+     * 大模型置信度（0.0~1.0）
+     * NULL 表示未经过大模型分析（旧引擎生成的数据）
+     * >= 阈值（默认0.8）：高置信度，status=confirmed
+     * <  阈值：低置信度，status=uncertain，前端标红提示
+     */
+    private Float confidence;
+
     /** 逻辑删除标志：0-未删除，1-已删除 */
     @TableLogic
     private Integer deleted;

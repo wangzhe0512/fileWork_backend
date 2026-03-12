@@ -18,7 +18,7 @@ public interface CompanyTemplateModuleMapper extends BaseMapper<CompanyTemplateM
      * 根据子模板ID查询所有模块，按sort和created_at排序
      */
     @Select("SELECT * FROM company_template_module " +
-            "WHERE company_template_id = #{templateId} " +
+            "WHERE company_template_id = #{templateId} AND deleted = 0 " +
             "ORDER BY sort ASC, created_at ASC")
     List<CompanyTemplateModule> selectByTemplateId(@Param("templateId") String templateId);
 
@@ -26,7 +26,7 @@ public interface CompanyTemplateModuleMapper extends BaseMapper<CompanyTemplateM
      * 根据子模板ID和模块code查询
      */
     @Select("SELECT * FROM company_template_module " +
-            "WHERE company_template_id = #{templateId} AND code = #{code}")
+            "WHERE company_template_id = #{templateId} AND code = #{code} AND deleted = 0")
     CompanyTemplateModule selectByTemplateIdAndCode(@Param("templateId") String templateId,
                                                      @Param("code") String code);
 
@@ -35,7 +35,7 @@ public interface CompanyTemplateModuleMapper extends BaseMapper<CompanyTemplateM
      */
     @Select("<script>" +
             "SELECT * FROM company_template_module " +
-            "WHERE company_template_id = #{templateId} " +
+            "WHERE company_template_id = #{templateId} AND deleted = 0 " +
             "AND code IN " +
             "<foreach collection='codes' item='code' open='(' separator=',' close=')'>#{code}</foreach> " +
             "ORDER BY sort ASC, created_at ASC" +

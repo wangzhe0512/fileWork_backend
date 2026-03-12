@@ -30,7 +30,10 @@ public class MybatisPlusConfig {
             // 系统级模板表，不绑定租户，全局共享
             "system_template",
             "system_module",
-            "system_placeholder"
+            "system_placeholder",
+            // 企业子模板模块和占位符表，通过 company_template_id 关联，不直接存 tenant_id
+            "company_template_module",
+            "company_template_placeholder"
     );
 
     @Bean
