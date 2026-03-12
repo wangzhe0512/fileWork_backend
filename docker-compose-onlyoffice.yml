@@ -1,0 +1,31 @@
+version: '3.8'
+
+# OnlyOffice Document Server 单独部署
+# 用于本地开发环境，后端服务使用 mvn spring-boot:run 本地启动
+#
+# 使用方法:
+#   docker-compose -f docker-compose-onlyoffice.yml up -d
+#
+# 访问地址: http://localhost:29090
+
+services:
+  onlyoffice:
+    image: onlyoffice/documentserver:8.0
+    container_name: fileproc-onlyoffice
+    restart: unless-stopped
+    ports:
+      - "29090:80"
+    volumes:
+      - onlyoffice_data:/var/www/onlyoffice/Data
+      - onlyoffice_logs:/var/log/onlyoffice
+    environment:
+      - JWT_ENABLED=false
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  onlyoffice_data:
+  onlyoffice_logs:

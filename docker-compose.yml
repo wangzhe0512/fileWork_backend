@@ -54,6 +54,8 @@ services:
       REDIS_PASS:
       FILE_UPLOAD_DIR: /app/uploads
       SPRING_PROFILES_ACTIVE: prod
+      ONLYOFFICE_SERVER_URL: http://onlyoffice:80
+      ONLYOFFICE_CALLBACK_URL: http://backend:8080/api/onlyoffice/callback
     volumes:
       - upload_data:/app/uploads
     depends_on:
@@ -62,7 +64,27 @@ services:
       redis:
         condition: service_healthy
 
+  # OnlyOffice Document Server - 在线文档编辑服务
+  onlyoffice:
+    image: onlyoffice/documentserver:8.0
+    container_name: fileproc-onlyoffice
+    restart: unless-stopped
+    ports:
+      - "29090:80"
+    volumes:
+      - onlyoffice_data:/var/www/onlyoffice/Data
+      - onlyoffice_logs:/var/log/onlyoffice
+    environment:
+      - JWT_ENABLED=false
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
 volumes:
   mysql_data:
   redis_data:
   upload_data:
+  onlyoffice_data:
+  onlyoffice_logs:

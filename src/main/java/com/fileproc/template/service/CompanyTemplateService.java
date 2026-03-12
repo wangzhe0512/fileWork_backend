@@ -193,6 +193,50 @@ public class CompanyTemplateService {
         return template;
     }
 
+    /**
+     * 更新子模板内容（从字节数组，用于 OnlyOffice 回调）
+     *
+     * @param id          子模板ID
+     * @param fileContent 文件字节数组
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void updateContent(String id, byte[] fileContent) {
+        if (fileContent == null || fileContent.length == 0) {
+            throw BizException.of(400, "文件内容不能为空");
+        }
+
+        CompanyTemplate template = getByIdWithFilePath(id);
+
+        // 生成新文件路径
+        String tenantId = TenantContext.getTenantId();
+        String companyId = template.getCompanyId();
+        String relDir = "company-templates/" + tenantId + "/" + companyId + "/";
+        String newFileName = UUID.randomUUID() + ".docx";
+
+        Path baseDir = Paths.get(uploadDir).normalize().toAbsolutePath();
+        Path fullDir = baseDir.resolve(relDir).normalize();
+        if (!fullDir.startsWith(baseDir)) throw BizException.of("非法路径");
+
+        try {
+            Files.createDirectories(fullDir);
+            Path filePath = fullDir.resolve(newFileName);
+            Files.write(filePath, fileContent);
+        } catch (IOException e) {
+            throw BizException.of("文件保存失败：" + e.getMessage());
+        }
+
+        String newRelPath = relDir + newFileName;
+
+        // 更新数据库记录
+        template.setFilePath(newRelPath);
+        template.setFileSize(FileUtil.formatSize(fileContent.length));
+        template.setUpdatedAt(LocalDateTime.now());
+        companyTemplateMapper.updateById(template);
+
+        log.info("[CompanyTemplateService] 子模板内容已更新: id={}, path={}, size={} bytes",
+                id, newRelPath, fileContent.length);
+    }
+
     // ========== 归档/删除 ==========
 
     /**

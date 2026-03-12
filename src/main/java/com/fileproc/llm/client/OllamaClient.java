@@ -3,13 +3,12 @@ package com.fileproc.llm.client;
 import com.fileproc.llm.config.OllamaProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.*;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
-import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -27,7 +26,6 @@ import java.util.Map;
 public class OllamaClient {
 
     private final OllamaProperties properties;
-    private final RestTemplateBuilder restTemplateBuilder;
 
     /**
      * 调用 Ollama 生成接口
@@ -106,9 +104,9 @@ public class OllamaClient {
      * 构建指定超时时间的 RestTemplate
      */
     private RestTemplate buildRestTemplate(int timeoutSeconds) {
-        return restTemplateBuilder
-                .connectTimeout(Duration.ofSeconds(5))
-                .readTimeout(Duration.ofSeconds(timeoutSeconds))
-                .build();
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(5000);  // 5秒连接超时
+        factory.setReadTimeout(timeoutSeconds * 1000);  // 读取超时（毫秒）
+        return new RestTemplate(factory);
     }
 }

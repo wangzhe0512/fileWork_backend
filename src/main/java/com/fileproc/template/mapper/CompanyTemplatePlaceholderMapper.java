@@ -98,4 +98,18 @@ public interface CompanyTemplatePlaceholderMapper extends BaseMapper<CompanyTemp
             "</foreach>" +
             "</script>")
     int batchUpdateMetadata(@Param("placeholders") List<CompanyTemplatePlaceholder> placeholders);
+
+    /**
+     * 根据子模板ID和占位符名称列表查询
+     * 用于前端跳转定位功能
+     */
+    @Select("<script>" +
+            "SELECT * FROM company_template_placeholder " +
+            "WHERE company_template_id = #{templateId} " +
+            "AND placeholder_name IN " +
+            "<foreach collection='names' item='name' open='(' separator=',' close=')'>#{name}</foreach> " +
+            "AND deleted = 0" +
+            "</script>")
+    List<CompanyTemplatePlaceholder> selectByTemplateIdAndNames(@Param("templateId") String templateId,
+                                                                  @Param("names") List<String> names);
 }

@@ -1,10 +1,12 @@
 package com.fileproc.template.controller;
 
 import com.fileproc.llm.service.LlmReverseOrchestrator;
+import com.fileproc.common.BizException;
 import com.fileproc.common.PageResult;
 import com.fileproc.common.R;
 import com.fileproc.common.TenantContext;
 import com.fileproc.common.util.FileUtil;
+import com.fileproc.template.mapper.CompanyTemplatePlaceholderMapper;
 import com.fileproc.datafile.entity.DataFile;
 import com.fileproc.datafile.mapper.DataFileMapper;
 import com.fileproc.report.service.ReverseTemplateEngine;
@@ -36,6 +38,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -43,6 +46,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 
 
@@ -76,6 +80,7 @@ public class CompanyTemplateController {
     private final ReverseTemplateEngine reverseTemplateEngine;
     private final LlmReverseOrchestrator llmReverseOrchestrator;
     private final DataFileMapper dataFileMapper;
+    private final CompanyTemplatePlaceholderMapper placeholderMapper;
 
     @Value("${file.upload-dir:./uploads}")
     private String uploadDir;
@@ -438,6 +443,78 @@ public class CompanyTemplateController {
     }
 
     /**
+     * OnlyOffice 回调接口（文档保存通知）
+     * <p>
+     * OnlyOffice 编辑器在文档保存时会调用此接口
+     * 参考：https://api.onlyoffice.com/editors/callback
+     * </p>
+     *
+     * @param id 子模板ID
+     * @param callback 回调数据
+     */
+    @PostMapping("/{id}/onlyoffice-callback")
+    public Map<String, Object> onlyofficeCallback(
+            @PathVariable String id,
+            @RequestBody OnlyOfficeCallback callback) {
+
+        log.info("[OnlyOfficeCallback] 收到回调: templateId={}, status={}", id, callback.getStatus());
+
+        // OnlyOffice 状态码：0=无变化, 1=编辑中, 2=准备保存, 3=保存中, 4=已关闭, 6=保存完成, 7=强制保存错误
+        int status = callback.getStatus();
+
+        if (status == 2 || status == 6) {
+            // 文档已保存，下载并更新
+            try {
+                String downloadUrl = callback.getUrl();
+                if (downloadUrl != null && !downloadUrl.isBlank()) {
+                    // 从 OnlyOffice 下载编辑后的文档
+                    downloadAndSaveFromOnlyOffice(id, downloadUrl);
+                    log.info("[OnlyOfficeCallback] 文档已保存: templateId={}", id);
+                }
+            } catch (Exception e) {
+                log.error("[OnlyOfficeCallback] 保存文档失败: templateId={}", id, e);
+                return Map.of("error", 1, "message", "保存失败: " + e.getMessage());
+            }
+        }
+
+        // 返回成功响应给 OnlyOffice
+        return Map.of("error", 0);
+    }
+
+    /**
+     * 从 OnlyOffice 下载并保存文档
+     */
+    private void downloadAndSaveFromOnlyOffice(String templateId, String downloadUrl) {
+        try {
+            java.net.URL url = new java.net.URL(downloadUrl);
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(30000);
+            conn.setReadTimeout(60000);
+
+            try (java.io.InputStream is = conn.getInputStream()) {
+                // 保存到临时文件
+                java.nio.file.Path tempFile = Files.createTempFile("onlyoffice_", ".docx");
+                Files.copy(is, tempFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+
+                // 读取文件内容
+                byte[] fileContent = Files.readAllBytes(tempFile);
+
+                // 更新子模板内容
+                companyTemplateService.updateContent(templateId, fileContent);
+
+                // 清理临时文件
+                Files.deleteIfExists(tempFile);
+
+                log.info("[OnlyOfficeCallback] 文档已下载并保存: templateId={}, size={} bytes",
+                        templateId, fileContent.length);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("下载或保存文档失败", e);
+        }
+    }
+
+    /**
      * 获取子模板的占位符状态列表
      * <p>
      * 返回所有占位符的状态（uncertain/confirmed/ignored）和位置信息
@@ -633,6 +710,75 @@ public class CompanyTemplateController {
         private List<String> placeholderIds;
     }
 
+    // ========== 新增：批量删除占位符接口 ==========
+
+    /**
+     * 批量删除子模板的占位符
+     * <p>
+     * 用于前端用户手动删除不需要的占位符
+     * </p>
+     *
+     * @param id            子模板ID
+     * @param deleteRequest 删除请求（包含占位符名称列表）
+     * @return 删除结果
+     */
+    @PostMapping("/{id}/delete-placeholders")
+    public R<Map<String, Object>> deletePlaceholders(
+            @PathVariable String id,
+            @RequestBody DeletePlaceholdersRequest deleteRequest) {
+
+        // 校验子模板存在
+        CompanyTemplate template = companyTemplateService.getById(id);
+        if (template == null) {
+            throw BizException.notFound("子模板");
+        }
+
+        List<String> names = deleteRequest.getPlaceholderNames();
+        if (names == null || names.isEmpty()) {
+            return R.ok("没有需要删除的占位符", Map.of(
+                    "deletedCount", 0,
+                    "totalRequested", 0
+            ));
+        }
+
+        // 批量删除
+        int deletedCount = 0;
+        int notFoundCount = 0;
+        List<String> notFoundNames = new ArrayList<>();
+
+        for (String name : names) {
+            CompanyTemplatePlaceholder ph = placeholderMapper.selectByTemplateIdAndName(id, name);
+            if (ph != null) {
+                placeholderMapper.deleteById(ph.getId());
+                deletedCount++;
+                log.info("[CompanyTemplateController] 占位符已删除: templateId={}, name={}", id, name);
+            } else {
+                notFoundCount++;
+                notFoundNames.add(name);
+                log.warn("[CompanyTemplateController] 占位符不存在: templateId={}, name={}", id, name);
+            }
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("deletedCount", deletedCount);
+        result.put("notFoundCount", notFoundCount);
+        result.put("totalRequested", names.size());
+        if (!notFoundNames.isEmpty()) {
+            result.put("notFoundNames", notFoundNames);
+        }
+
+        log.info("[CompanyTemplateController] 批量删除占位符完成: templateId={}, deleted={}, notFound={}",
+                id, deletedCount, notFoundCount);
+
+        return R.ok("删除完成", result);
+    }
+
+    @Data
+    public static class DeletePlaceholdersRequest {
+        /** 要删除的占位符名称列表 */
+        private List<String> placeholderNames;
+    }
+
     // ========== 私有方法 ==========
 
     private void validateWordFile(MultipartFile file) {
@@ -696,5 +842,124 @@ public class CompanyTemplateController {
                 placeholder.setType(confirmedType);
             }
         }
+    }
+
+    // ========== 新增：占位符位置查询接口（供OnlyOffice跳转定位）==========
+
+    /**
+     * 查询占位符在文档中的位置信息
+     * <p>
+     * 用于前端点击"去编辑器查看"时，获取占位符在Word文档中的精确位置，
+     * 通过OnlyOffice API跳转到对应位置
+     * </p>
+     *
+     * @param id    子模板ID
+     * @param names 占位符名称列表（逗号分隔），为空则返回所有占位符
+     * @return 占位符位置信息列表
+     */
+    @GetMapping("/{id}/placeholder-positions")
+    public R<List<PlaceholderPositionVO>> getPlaceholderPositions(
+            @PathVariable String id,
+            @RequestParam(required = false) String names) {
+
+        // 校验子模板存在
+        CompanyTemplate template = companyTemplateService.getById(id);
+        if (template == null) {
+            throw BizException.notFound("子模板");
+        }
+
+        List<CompanyTemplatePlaceholder> placeholders;
+        if (names != null && !names.isBlank()) {
+            List<String> nameList = Arrays.asList(names.split(","));
+            placeholders = placeholderMapper.selectByTemplateIdAndNames(id, nameList);
+        } else {
+            placeholders = placeholderMapper.selectByTemplateId(id);
+        }
+
+        List<PlaceholderPositionVO> result = placeholders.stream()
+                .filter(p -> p.getPositionJson() != null && !p.getPositionJson().isBlank())
+                .map(p -> {
+                    PlaceholderPositionVO vo = new PlaceholderPositionVO();
+                    vo.setPlaceholderName(p.getPlaceholderName());
+                    vo.setPosition(parsePositionJson(p.getPositionJson()));
+                    vo.setStatus(p.getStatus());
+                    return vo;
+                })
+                .collect(Collectors.toList());
+
+        return R.ok(result);
+    }
+
+    /**
+     * 解析位置JSON字符串为Map
+     */
+    private Map<String, Object> parsePositionJson(String positionJson) {
+        try {
+            // 简单手动解析JSON，避免引入额外依赖
+            Map<String, Object> map = new HashMap<>();
+            String json = positionJson.trim();
+            if (json.startsWith("{") && json.endsWith("}")) {
+                json = json.substring(1, json.length() - 1);
+                String[] pairs = json.split(",");
+                for (String pair : pairs) {
+                    String[] kv = pair.split(":", 2);
+                    if (kv.length == 2) {
+                        String key = kv[0].trim().replace("\"", "");
+                        String value = kv[1].trim();
+                        // 尝试解析为数字，否则作为字符串
+                        if (value.matches("-?\\d+")) {
+                            map.put(key, Integer.parseInt(value));
+                        } else if (value.startsWith("\"") && value.endsWith("\"")) {
+                            map.put(key, value.substring(1, value.length() - 1));
+                        } else {
+                            map.put(key, value);
+                        }
+                    }
+                }
+            }
+            return map;
+        } catch (Exception e) {
+            log.warn("[CompanyTemplateController] 解析位置JSON失败: {}", positionJson, e);
+            return new HashMap<>();
+        }
+    }
+
+    // ========== DTO ==========
+
+    /**
+     * 占位符位置信息VO
+     */
+    @Data
+    public static class PlaceholderPositionVO {
+        /** 占位符名称 */
+        private String placeholderName;
+        /** 位置信息（paragraphIndex/runIndex/offset/elementType等） */
+        private Map<String, Object> position;
+        /** 状态：uncertain/confirmed/ignored */
+        private String status;
+    }
+
+    /**
+     * OnlyOffice 回调请求DTO
+     * 参考：https://api.onlyoffice.com/editors/callback
+     */
+    @Data
+    public static class OnlyOfficeCallback {
+        /** 跟踪更改模式 */
+        private String changesurl;
+        /** 文档下载链接（保存时提供） */
+        private String url;
+        /** 历史信息 */
+        private Object history;
+        /** 用户列表 */
+        private List<Map<String, Object>> users;
+        /** 接收操作状态 */
+        private Integer status;
+        /** 上次保存的操作类型 */
+        private Integer saved;
+        /** 强制保存类型 */
+        private Integer forcesavetype;
+        /** 文档密钥 */
+        private String key;
     }
 }
