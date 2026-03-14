@@ -7,6 +7,12 @@ import com.fileproc.common.R;
 import com.fileproc.common.TenantContext;
 import com.fileproc.common.util.FileUtil;
 import com.fileproc.template.mapper.CompanyTemplatePlaceholderMapper;
+import com.fileproc.auth.util.JwtUtil;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.security.Keys;
+import javax.crypto.SecretKey;
+import java.util.Date;
 import com.fileproc.datafile.entity.DataFile;
 import com.fileproc.datafile.mapper.DataFileMapper;
 import com.fileproc.report.service.ReverseTemplateEngine;
@@ -81,9 +87,13 @@ public class CompanyTemplateController {
     private final LlmReverseOrchestrator llmReverseOrchestrator;
     private final DataFileMapper dataFileMapper;
     private final CompanyTemplatePlaceholderMapper placeholderMapper;
+    private final JwtUtil jwtUtil;
 
     @Value("${file.upload-dir:./uploads}")
     private String uploadDir;
+
+    @Value("${jwt.user.secret}")
+    private String jwtSecret;
 
     /**
      * 反向生成企业子模板（大模型驱动，异步处理）
@@ -380,7 +390,8 @@ public class CompanyTemplateController {
     /**
      * 获取子模板可访问 URL（供 OnlyOffice 等在线编辑器使用）
      * <p>
-     * 返回受鉴权的下载接口地址，OnlyOffice 编辑器需携带 Authorization header 访问。
+     * 生成带有临时 Token 的公开下载地址，OnlyOffice 可直接访问无需登录。
+     * Token 有效期 5 分钟，仅允许访问指定模板。
      * 格式：{ "url": "...", "fileName": "...", "fileType": "docx" }
      * </p>
      */
@@ -391,7 +402,10 @@ public class CompanyTemplateController {
         CompanyTemplate template = companyTemplateService.getById(id);
         if (template == null) throw BizException.notFound("子模板");
 
-        // 构造下载接口完整 URL（受鉴权，OnlyOffice 需携带 JWT token 访问）
+        // 生成临时 Token（5分钟有效期）
+        String tempToken = generateTempToken(id);
+
+        // 构造公开下载接口 URL
         String scheme = request.getScheme();
         String serverName = request.getServerName();
         int serverPort = request.getServerPort();
@@ -404,7 +418,7 @@ public class CompanyTemplateController {
         }
 
         String downloadUrl = scheme + "://" + serverName + portStr
-                + contextPath + "/company-template/" + id + "/download";
+                + contextPath + "/company-template/" + id + "/public-download?temp_token=" + tempToken;
 
         String fileName = template.getName() != null ? template.getName() + ".docx" : id + ".docx";
 
@@ -413,6 +427,70 @@ public class CompanyTemplateController {
                 "fileName", fileName,
                 "fileType", "docx"
         ));
+    }
+
+    /**
+     * 公开下载接口（供 OnlyOffice 使用，通过临时 Token 免登录访问）
+     * <p>
+     * 临时 Token 有效期 5 分钟，通过 /{id}/content-url 接口获取。
+     * </p>
+     */
+    @GetMapping("/{id}/public-download")
+    public ResponseEntity<Resource> publicDownload(
+            @PathVariable String id,
+            @RequestParam("temp_token") String tempToken) throws IOException {
+        // 验证临时 Token
+        if (!validateTempToken(tempToken, id)) {
+            return ResponseEntity.status(403).body(null);
+        }
+
+        FileUtil.DownloadInfo info = companyTemplateService.download(id);
+        String encodedName = URLEncoder.encode(info.getName(), StandardCharsets.UTF_8)
+                .replace("+", "%20");
+        byte[] bytes = Files.readAllBytes(info.getPath());
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename*=UTF-8''" + encodedName)
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .contentLength(bytes.length)
+                .body(new org.springframework.core.io.ByteArrayResource(bytes));
+    }
+
+    /**
+     * 生成临时 Token（用于 OnlyOffice 免登录下载）
+     * 有效期 5 分钟，只能访问指定模板
+     */
+    private String generateTempToken(String templateId) {
+        SecretKey key = Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
+        return Jwts.builder()
+                .subject("onlyoffice-temp")
+                .claim("templateId", templateId)
+                .claim("type", "temp-download")
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + 5 * 60 * 1000)) // 5分钟
+                .signWith(key)
+                .compact();
+    }
+
+    /**
+     * 验证临时 Token
+     */
+    private boolean validateTempToken(String token, String expectedTemplateId) {
+        try {
+            SecretKey key = Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
+            Claims claims = Jwts.parser()
+                    .verifyWith(key)
+                    .build()
+                    .parseSignedClaims(token)
+                    .getPayload();
+
+            String type = claims.get("type", String.class);
+            String templateId = claims.get("templateId", String.class);
+
+            return "temp-download".equals(type) && expectedTemplateId.equals(templateId);
+        } catch (Exception e) {
+            log.debug("临时Token验证失败: {}", e.getMessage());
+            return false;
+        }
     }
 
     /**
@@ -445,39 +523,49 @@ public class CompanyTemplateController {
     /**
      * OnlyOffice 回调接口（文档保存通知）
      * <p>
-     * OnlyOffice 编辑器在文档保存时会调用此接口
+     * OnlyOffice 服务器在文档保存时主动调用此接口，Content-Type 为 application/json。
+     * 使用原始字符串接收并手动解析，兼容 OnlyOffice 各版本的回调格式差异。
      * 参考：https://api.onlyoffice.com/editors/callback
      * </p>
      *
      * @param id 子模板ID
-     * @param callback 回调数据
+     * @param rawBody 原始请求体（JSON字符串）
      */
-    @PostMapping("/{id}/onlyoffice-callback")
+    @PostMapping(value = "/{id}/onlyoffice-callback", consumes = {"application/json", "text/plain", "*/*"})
     public Map<String, Object> onlyofficeCallback(
             @PathVariable String id,
-            @RequestBody OnlyOfficeCallback callback) {
+            @RequestBody(required = false) String rawBody) {
 
-        log.info("[OnlyOfficeCallback] 收到回调: templateId={}, status={}", id, callback.getStatus());
+        log.info("[OnlyOfficeCallback] 收到回调: templateId={}, body={}", id, rawBody);
 
-        // OnlyOffice 状态码：0=无变化, 1=编辑中, 2=准备保存, 3=保存中, 4=已关闭, 6=保存完成, 7=强制保存错误
-        int status = callback.getStatus();
-
-        if (status == 2 || status == 6) {
-            // 文档已保存，下载并更新
-            try {
-                String downloadUrl = callback.getUrl();
-                if (downloadUrl != null && !downloadUrl.isBlank()) {
-                    // 从 OnlyOffice 下载编辑后的文档
-                    downloadAndSaveFromOnlyOffice(id, downloadUrl);
-                    log.info("[OnlyOfficeCallback] 文档已保存: templateId={}", id);
-                }
-            } catch (Exception e) {
-                log.error("[OnlyOfficeCallback] 保存文档失败: templateId={}", id, e);
-                return Map.of("error", 1, "message", "保存失败: " + e.getMessage());
-            }
+        if (rawBody == null || rawBody.isBlank()) {
+            log.warn("[OnlyOfficeCallback] 请求体为空: templateId={}", id);
+            return Map.of("error", 0);
         }
 
-        // 返回成功响应给 OnlyOffice
+        try {
+            // 手动解析JSON，避免依赖 Content-Type 绑定
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            com.fasterxml.jackson.databind.JsonNode node = mapper.readTree(rawBody);
+
+            int status = node.path("status").asInt(0);
+            String downloadUrl = node.path("url").asText(null);
+
+            log.info("[OnlyOfficeCallback] 解析结果: templateId={}, status={}, url={}", id, status, downloadUrl);
+
+            // OnlyOffice 状态码：0=无变化, 1=编辑中, 2=准备保存, 3=保存中, 4=已关闭, 6=保存完成, 7=强制保存错误
+            if ((status == 2 || status == 6) && downloadUrl != null && !downloadUrl.isBlank()) {
+                downloadAndSaveFromOnlyOffice(id, downloadUrl);
+                log.info("[OnlyOfficeCallback] 文档已保存: templateId={}", id);
+            }
+
+        } catch (Exception e) {
+            log.error("[OnlyOfficeCallback] 处理回调失败: templateId={}", id, e);
+            // OnlyOffice 要求返回 {"error":0} 才认为成功，即使处理失败也返回0避免重试风暴
+            return Map.of("error", 0);
+        }
+
+        // 必须返回 {"error":0} 告知 OnlyOffice 回调已处理
         return Map.of("error", 0);
     }
 

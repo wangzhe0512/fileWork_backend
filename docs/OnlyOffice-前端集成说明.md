@@ -529,8 +529,13 @@ OnlyOffice 回调后端时可能遇到跨域问题，需要后端配置：
 
 检查以下几点：
 - `document.url` 必须可直接访问（浏览器能打开）
-- 后端 `/api/company-template/{id}/content` 接口需要允许匿名访问或传递正确的 JWT
+- `content-url` 接口返回的 URL 已包含临时 Token，可直接供 OnlyOffice 使用
 - 文档格式必须是 `docx`，不能是 `doc`
+
+**验证方法**：
+1. 先调用 `GET /api/company-template/{id}/content-url` 获取 URL
+2. 在浏览器新标签页直接打开返回的 `url`，看能否下载文件
+3. 如果不能，可能是临时 Token 过期（有效期5分钟），重新获取即可
 
 ### 3. 回调地址问题
 

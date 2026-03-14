@@ -90,6 +90,10 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 // 公开路径
                 .requestMatchers("/auth/login", "/tenants/list").permitAll()
+                // OnlyOffice 公开下载接口（临时 Token 验证）
+                .requestMatchers("/company-template/*/public-download").permitAll()
+                // OnlyOffice 文档保存回调（由 OnlyOffice 服务器主动调用，无法携带用户 JWT）
+                .requestMatchers("/company-template/*/onlyoffice-callback").permitAll()
                 // Knife4j 文档（生产环境通过 springdoc.api-docs.enabled=false 关闭）
                 .requestMatchers("/v3/api-docs/**", "/swagger-ui/**",
                         "/swagger-ui.html", "/doc.html", "/webjars/**")
