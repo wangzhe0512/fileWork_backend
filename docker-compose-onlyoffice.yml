@@ -15,6 +15,8 @@ services:
     restart: unless-stopped
     ports:
       - "29090:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - onlyoffice_data:/var/www/onlyoffice/Data
       - onlyoffice_logs:/var/log/onlyoffice
