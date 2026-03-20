@@ -2092,7 +2092,7 @@ public class ReverseTemplateEngine {
         }
         firstT.setStringValue(sb.toString());
         // 设置 xml:space="preserve" 防止 Word 截断首尾空格
-        firstT.setSpace("preserve");
+        firstT.setSpace(org.apache.xmlbeans.impl.xb.xmlschema.SpaceAttribute.Space.PRESERVE);
 
         // 清空其余 CTRun 的所有 w:t（保留节点结构，不破坏脚注等引用）
         for (int i = 1; i < ctRuns.size(); i++) {
