@@ -6,6 +6,8 @@ import com.fileproc.template.entity.SystemPlaceholder;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.xwpf.usermodel.*;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -143,7 +145,7 @@ public class ReverseTemplateEngine {
         reg.add(new RegistryEntry("清单模板-2_关联公司信息",        "关联公司信息", PlaceholderType.TABLE_CLEAR, "list", null, null));
         reg.add(new RegistryEntry("清单模板-关联方个人信息",        "关联方个人信息", PlaceholderType.TABLE_CLEAR, "list", null, null));
         reg.add(new RegistryEntry("清单模板-关联关系变化情况",      "关联关系变化", PlaceholderType.TABLE_CLEAR, "list", null, null));
-        reg.add(new RegistryEntry("模板清单-关联交易汇总表",        "关联交易汇总", PlaceholderType.TABLE_CLEAR, "list", null, null));
+        reg.add(new RegistryEntry("清单模板-关联交易汇总表",        "关联交易汇总", PlaceholderType.TABLE_CLEAR, "list", null, null));
         reg.add(new RegistryEntry("清单模板-5_客户清单",            "客户清单",   PlaceholderType.TABLE_CLEAR, "list", null, null));
         reg.add(new RegistryEntry("清单模板-4_供应商清单",          "供应商清单", PlaceholderType.TABLE_CLEAR, "list", null, null));
         reg.add(new RegistryEntry("清单模板-6_劳务交易表",          "劳务交易表", PlaceholderType.TABLE_CLEAR, "list", null, null));
@@ -404,6 +406,9 @@ public class ReverseTemplateEngine {
                 log.info("[ReverseEngine] TABLE_CLEAR处理：清空{}个单元格，处理占位符={}, 未定位={}",
                         cleared, tableClearEntries.size() - tableClearUnmatched.size(), tableClearUnmatched.size());
             }
+
+            // 2d. 全文占位符规范化（去除 {{...}} 内多余空格，修正合并Run时产生的格式问题）
+            normalizeAllPlaceholdersInDocument(doc);
 
             // 写出子模板文件
             try {
@@ -901,6 +906,48 @@ public class ReverseTemplateEngine {
                     pendingList, matchedList, "段落#" + paraIndex, paraIndex, -1, -1, -1, fullDocText);
             paraIndex++;
         }
+        // 处理页眉
+        for (XWPFHeader header : doc.getHeaderList()) {
+            int hParaIndex = 0;
+            for (XWPFParagraph paragraph : header.getParagraphs()) {
+                count += replaceInRunsNew(paragraph.getRuns(), entries,
+                        pendingList, matchedList, "页眉段落#" + hParaIndex, hParaIndex, -1, -1, -1, fullDocText);
+                hParaIndex++;
+            }
+            for (XWPFTable table : header.getTables()) {
+                for (XWPFTableRow row : table.getRows()) {
+                    for (XWPFTableCell cell : row.getTableCells()) {
+                        int cParaIndex = 0;
+                        for (XWPFParagraph paragraph : cell.getParagraphs()) {
+                            count += replaceInRunsNew(paragraph.getRuns(), entries,
+                                    pendingList, matchedList, "页眉表格段落#" + cParaIndex, cParaIndex, -1, -1, -1, fullDocText);
+                            cParaIndex++;
+                        }
+                    }
+                }
+            }
+        }
+        // 处理页脚
+        for (XWPFFooter footer : doc.getFooterList()) {
+            int fParaIndex = 0;
+            for (XWPFParagraph paragraph : footer.getParagraphs()) {
+                count += replaceInRunsNew(paragraph.getRuns(), entries,
+                        pendingList, matchedList, "页脚段落#" + fParaIndex, fParaIndex, -1, -1, -1, fullDocText);
+                fParaIndex++;
+            }
+            for (XWPFTable table : footer.getTables()) {
+                for (XWPFTableRow row : table.getRows()) {
+                    for (XWPFTableCell cell : row.getTableCells()) {
+                        int cParaIndex = 0;
+                        for (XWPFParagraph paragraph : cell.getParagraphs()) {
+                            count += replaceInRunsNew(paragraph.getRuns(), entries,
+                                    pendingList, matchedList, "页脚表格段落#" + cParaIndex, cParaIndex, -1, -1, -1, fullDocText);
+                            cParaIndex++;
+                        }
+                    }
+                }
+            }
+        }
         return count;
     }
 
@@ -994,7 +1041,13 @@ public class ReverseTemplateEngine {
                 if (value == null || value.isBlank()) continue;
                 String phMark = "{{" + entry.getPlaceholderName() + "}}";
                 if (text.contains(phMark)) continue;
-                if (!text.contains(value)) continue;
+                if (!text.contains(value)) {
+                    // 特例：年度字段（2位数字）允许通过变体检测放行
+                    if (!isYearFieldEntry(entry)) continue;
+                    List<String> yearVariants = buildYearVariants(value);
+                    boolean anyVariantPresent = yearVariants.stream().anyMatch(text::contains);
+                    if (!anyVariantPresent) continue;
+                }
 
                 PlaceholderType pType = entry.getPlaceholderType();
 
@@ -1018,20 +1071,34 @@ public class ReverseTemplateEngine {
                     log.debug("[ReverseEngine] BVD-uncertain: '{}' -> {}", value, phMark);
 
                 } else if (pType == PlaceholderType.DATA_CELL) {
-                    // ③ DATA_CELL：按值长度分支
-                    if (value.length() < MEDIUM_VALUE_THRESHOLD) {
-                        // 短值：词边界正则替换
-                        String newText = replaceWithWordBoundary(text, value, phMark);
-                        if (!newText.equals(text)) {
-                            text = newText;
-                            runModified = true;
-                            count++;
-                            addMatchedRecord(matchedList, entry, value, originalText, location,
-                                    "confirmed", paragraphIndex, tableIndex, rowIndex, cellIndex);
-                            log.debug("[ReverseEngine] 词边界替换[{}]: '{}' -> {}", entry.getDisplayName(), value, phMark);
+                    // ③ DATA_CELL：按值类型分支
+                    if (isYearFieldEntry(entry)) {
+                        // 年度字段特殊处理：将2位年份扩展为多格式变体逐一替换
+                        // 变体末尾含汉字（如"2024年"）→ 精确替换；裸数字（"2024"）→ 词边界替换（防误替换）
+                        List<String> yearVariants = buildYearVariants(value);
+                        boolean replaced = false;
+                        for (String variant : yearVariants) {
+                            if (!text.contains(variant)) continue;
+                            char lastChar = variant.charAt(variant.length() - 1);
+                            boolean endsWithChinese = lastChar >= '\u4e00' && lastChar <= '\u9fa5';
+                            String newText = endsWithChinese
+                                    ? text.replace(variant, phMark)
+                                    : replaceWithWordBoundary(text, variant, phMark);
+                            if (!newText.equals(text)) {
+                                text = newText;
+                                runModified = true;
+                                if (!replaced) {
+                                    count++;
+                                    replaced = true;
+                                    addMatchedRecord(matchedList, entry, variant, originalText, location,
+                                            "confirmed", paragraphIndex, tableIndex, rowIndex, cellIndex);
+                                }
+                                log.debug("[ReverseEngine] 年度变体替换[{}]: '{}' -> {}", entry.getDisplayName(), variant, phMark);
+                            }
                         }
                     } else {
-                        // 长值：直接精确替换
+                        // 非年度字段：统一使用精确替换（text.replace）
+                        // 词边界正则对中文简称无效（前后几乎总是汉字），直接精确替换
                         String newText = text.replace(value, phMark);
                         if (!newText.equals(text)) {
                             text = newText;
@@ -1071,10 +1138,99 @@ public class ReverseTemplateEngine {
                 }
             }
             if (runModified) {
+                // 对生成的占位符做规范化：去除 {{ 后、}} 前的多余空格，以及占位符名内部多余空格
+                text = normalizePlaceholders(text);
                 run.setText(text, 0);
             }
         }
         return count;
+    }
+
+    /**
+     * 规范化占位符格式：去除 {{ 与 }} 内多余空格，保证格式为 {{清单模板-xxx}}。
+     * 解决 Run 合并时因空格 Run 导致的 {{ 清单模板...}} 或 {{清单模板-数据 表-B5}} 等问题。
+     */
+    private String normalizePlaceholders(String text) {
+        if (text == null || !text.contains("{{")) return text;
+        // 1. 去除 {{ 紧跟的空格：{{ 清单 → {{清单
+        text = text.replaceAll("\\{\\{\\s+", "{{");
+        // 2. 去除 }} 前的空格：清单 }} → 清单}}
+        text = text.replaceAll("\\s+\\}\\}", "}}");
+        // 3. 去除占位符名内部多余空格（如 "数据 表" → "数据表"）
+        //    只处理 {{ 和 }} 之间的空格
+        StringBuffer sb = new StringBuffer();
+        java.util.regex.Matcher m = Pattern.compile("\\{\\{([^}]+)\\}\\}").matcher(text);
+        while (m.find()) {
+            String inner = m.group(1).replaceAll("\\s+", "");
+            m.appendReplacement(sb, "{{" + java.util.regex.Matcher.quoteReplacement(inner) + "}}");
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
+    /**
+     * 遍历文档所有位置（正文段落、表格、页眉、页脚）的每个 Run，
+     * 对含有 {{ 的 Run 文本调用 normalizePlaceholders 做占位符格式规范化。
+     * 在写出文件前调用，确保所有 Run 合并阶段产生的多余空格被清除。
+     */
+    private void normalizeAllPlaceholdersInDocument(XWPFDocument doc) {
+        // 正文段落
+        for (XWPFParagraph para : doc.getParagraphs()) {
+            normalizeRunsInParagraph(para);
+        }
+        // 正文表格
+        for (XWPFTable table : doc.getTables()) {
+            for (XWPFTableRow row : table.getRows()) {
+                for (XWPFTableCell cell : row.getTableCells()) {
+                    for (XWPFParagraph para : cell.getParagraphs()) {
+                        normalizeRunsInParagraph(para);
+                    }
+                }
+            }
+        }
+        // 页眉
+        for (XWPFHeader header : doc.getHeaderList()) {
+            for (XWPFParagraph para : header.getParagraphs()) {
+                normalizeRunsInParagraph(para);
+            }
+            for (XWPFTable table : header.getTables()) {
+                for (XWPFTableRow row : table.getRows()) {
+                    for (XWPFTableCell cell : row.getTableCells()) {
+                        for (XWPFParagraph para : cell.getParagraphs()) {
+                            normalizeRunsInParagraph(para);
+                        }
+                    }
+                }
+            }
+        }
+        // 页脚
+        for (XWPFFooter footer : doc.getFooterList()) {
+            for (XWPFParagraph para : footer.getParagraphs()) {
+                normalizeRunsInParagraph(para);
+            }
+            for (XWPFTable table : footer.getTables()) {
+                for (XWPFTableRow row : table.getRows()) {
+                    for (XWPFTableCell cell : row.getTableCells()) {
+                        for (XWPFParagraph para : cell.getParagraphs()) {
+                            normalizeRunsInParagraph(para);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private void normalizeRunsInParagraph(XWPFParagraph para) {
+        for (XWPFRun run : para.getRuns()) {
+            String text = run.getText(0);
+            if (text != null && text.contains("{{")) {
+                String normalized = normalizePlaceholders(text);
+                if (!normalized.equals(text)) {
+                    run.setText(normalized, 0);
+                    log.debug("[ReverseEngine] 规范化占位符: '{}' -> '{}'", text, normalized);
+                }
+            }
+        }
     }
 
     /**
@@ -1092,15 +1248,47 @@ public class ReverseTemplateEngine {
      */
     private String replaceWithWordBoundary(String text, String value, String replacement) {
         if (text == null || value == null || value.isBlank()) return text;
-        // 中文词边界：前后不是汉字/字母/数字
-        String boundary = "(?<![\\u4e00-\\u9fa5A-Za-z0-9])";
-        String pattern = boundary + Pattern.quote(value) + boundary;
+        // 中文词边界：前面不是汉字/字母/数字（lookbehind），后面不是汉字/字母/数字（lookahead）
+        String prefix = "(?<![\\u4e00-\\u9fa5A-Za-z0-9])";
+        String suffix = "(?![\\u4e00-\\u9fa5A-Za-z0-9])";
+        String pattern = prefix + Pattern.quote(value) + suffix;
         try {
             return text.replaceAll(pattern, Matcher.quoteReplacement(replacement));
         } catch (Exception e) {
             log.warn("[ReverseEngine] 词边界替换正则异常，回退到精确替换: value='{}', err={}", value, e.getMessage());
             return text.replace(value, replacement);
         }
+    }
+
+    /**
+     * 判断 entry 是否为年度字段：占位符名为 "清单模板-数据表-B2" 且值为2位纯数字（如 "24"）。
+     *
+     * @param entry Excel 条目
+     * @return true 表示需要走年度多格式匹配逻辑
+     */
+    private boolean isYearFieldEntry(ExcelEntry entry) {
+        return "清单模板-数据表-B2".equals(entry.getPlaceholderName())
+                && entry.getValue() != null
+                && entry.getValue().matches("\\d{2}");
+    }
+
+    /**
+     * 根据2位年份缩写构建完整年份变体列表，按最长形式优先排序，防止"2024年"先被替换后"2024年度"找不到匹配。
+     *
+     * <p>示例："24" → ["2024财务年度", "2024财年", "2024年度", "2024年", "2024"]
+     *
+     * @param twoDigitYear 2位年份字符串，如 "24"
+     * @return 年份变体列表（从长到短）
+     */
+    private List<String> buildYearVariants(String twoDigitYear) {
+        String fullYear = "20" + twoDigitYear;
+        return List.of(
+                fullYear + "财务年度",  // 最长优先
+                fullYear + "财年",
+                fullYear + "年度",
+                fullYear + "年",
+                fullYear              // 兜底
+        );
     }
 
     /**
@@ -1831,19 +2019,90 @@ public class ReverseTemplateEngine {
                 }
             }
         }
+        // 页眉段落及表格
+        for (XWPFHeader header : doc.getHeaderList()) {
+            for (XWPFParagraph paragraph : header.getParagraphs()) {
+                mergeRunsInParagraph(paragraph);
+            }
+            for (XWPFTable table : header.getTables()) {
+                for (XWPFTableRow row : table.getRows()) {
+                    for (XWPFTableCell cell : row.getTableCells()) {
+                        for (XWPFParagraph paragraph : cell.getParagraphs()) {
+                            mergeRunsInParagraph(paragraph);
+                        }
+                    }
+                }
+            }
+        }
+        // 页脚段落及表格
+        for (XWPFFooter footer : doc.getFooterList()) {
+            for (XWPFParagraph paragraph : footer.getParagraphs()) {
+                mergeRunsInParagraph(paragraph);
+            }
+            for (XWPFTable table : footer.getTables()) {
+                for (XWPFTableRow row : table.getRows()) {
+                    for (XWPFTableCell cell : row.getTableCells()) {
+                        for (XWPFParagraph paragraph : cell.getParagraphs()) {
+                            mergeRunsInParagraph(paragraph);
+                        }
+                    }
+                }
+            }
+        }
     }
 
+    /**
+     * 合并段落内所有 Run 的文本，避免占位符被拆入多个 Run。
+     * <p>
+     * 使用底层 CTP.getRList() 代替 POI 高层 paragraph.getRuns()，
+     * 原因：getRuns() 会跳过含脚注引用（w:footnoteReference）等特殊子元素的 CTRun，
+     * 导致含脚注的段落合并不完整，占位符文本（如 {{清单模板-数据表-B5}}）碎片分散于前后两个 Run。
+     * <p>
+     * 本实现直接遍历 XML 层所有 CTRun，拼接全部 w:t 文本到第一个 CTRun，
+     * 清空其余 CTRun 的 w:t（不删除节点，保留脚注引用等结构）。
+     */
     private void mergeRunsInParagraph(XWPFParagraph paragraph) {
-        List<XWPFRun> runs = paragraph.getRuns();
-        if (runs == null || runs.size() <= 1) return;
+        List<CTR> ctRuns = paragraph.getCTP().getRList();
+        if (ctRuns == null || ctRuns.size() <= 1) return;
+
+        // 拼接所有 CTRun 的 w:t 文本
         StringBuilder sb = new StringBuilder();
-        for (XWPFRun run : runs) {
-            String t = run.getText(0);
-            sb.append(t != null ? t : "");
+        for (CTR ctRun : ctRuns) {
+            List<CTText> tList = ctRun.getTList();
+            if (tList != null) {
+                for (CTText t : tList) {
+                    String val = t.getStringValue();
+                    sb.append(val != null ? val : "");
+                }
+            }
         }
-        runs.get(0).setText(sb.toString(), 0);
-        for (int i = 1; i < runs.size(); i++) {
-            runs.get(i).setText("", 0);
+
+        // 写入第一个 CTRun
+        CTR firstRun = ctRuns.get(0);
+        List<CTText> firstTList = firstRun.getTList();
+        CTText firstT;
+        if (firstTList != null && !firstTList.isEmpty()) {
+            firstT = firstTList.get(0);
+            // 清空第一个 CTRun 中多余的 w:t（保留一个）
+            for (int i = firstTList.size() - 1; i >= 1; i--) {
+                firstRun.removeT(i);
+            }
+        } else {
+            firstT = firstRun.addNewT();
+        }
+        firstT.setStringValue(sb.toString());
+        // 设置 xml:space="preserve" 防止 Word 截断首尾空格
+        firstT.setSpace("preserve");
+
+        // 清空其余 CTRun 的所有 w:t（保留节点结构，不破坏脚注等引用）
+        for (int i = 1; i < ctRuns.size(); i++) {
+            CTR ctRun = ctRuns.get(i);
+            List<CTText> tList = ctRun.getTList();
+            if (tList != null) {
+                for (CTText t : tList) {
+                    t.setStringValue("");
+                }
+            }
         }
     }
 
