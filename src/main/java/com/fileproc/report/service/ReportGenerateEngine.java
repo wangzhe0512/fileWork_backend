@@ -118,6 +118,8 @@ public class ReportGenerateEngine {
             replaceTablePlaceholders(doc, tableValues);
             // 同时替换表格内文本占位符
             replaceTextInTables(doc, textValues);
+            // 替换页眉/页脚中的文本占位符
+            replaceHeaderFooterPlaceholders(doc, textValues);
 
             try (FileOutputStream fos = new FileOutputStream(outputPath)) {
                 doc.write(fos);
@@ -335,6 +337,41 @@ public class ReportGenerateEngine {
                 for (XWPFTableCell cell : row.getTableCells()) {
                     for (XWPFParagraph paragraph : cell.getParagraphs()) {
                         replacePlaceholdersInParagraph(paragraph, textValues);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 替换页眉/页脚中的文本占位符，覆盖段落和表格单元格。
+     * 参考反向引擎 ReverseTemplateEngine 页眉/页脚处理结构。
+     */
+    private void replaceHeaderFooterPlaceholders(XWPFDocument doc, Map<String, String> textValues) {
+        for (XWPFHeader header : doc.getHeaderList()) {
+            for (XWPFParagraph paragraph : header.getParagraphs()) {
+                replacePlaceholdersInParagraph(paragraph, textValues);
+            }
+            for (XWPFTable table : header.getTables()) {
+                for (XWPFTableRow row : table.getRows()) {
+                    for (XWPFTableCell cell : row.getTableCells()) {
+                        for (XWPFParagraph paragraph : cell.getParagraphs()) {
+                            replacePlaceholdersInParagraph(paragraph, textValues);
+                        }
+                    }
+                }
+            }
+        }
+        for (XWPFFooter footer : doc.getFooterList()) {
+            for (XWPFParagraph paragraph : footer.getParagraphs()) {
+                replacePlaceholdersInParagraph(paragraph, textValues);
+            }
+            for (XWPFTable table : footer.getTables()) {
+                for (XWPFTableRow row : table.getRows()) {
+                    for (XWPFTableCell cell : row.getTableCells()) {
+                        for (XWPFParagraph paragraph : cell.getParagraphs()) {
+                            replacePlaceholdersInParagraph(paragraph, textValues);
+                        }
                     }
                 }
             }
