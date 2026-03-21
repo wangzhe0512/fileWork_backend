@@ -206,7 +206,11 @@ public class ReverseTemplateEngine {
 
         // ===== 第四类：BVD 数据占位符（BVD Excel 按坐标读取，全部标 uncertain） =====
         // 来源：BVD Excel 各 Sheet
-        reg.add(new RegistryEntry("BVD数据模板-数据表B1~B4",             "BVD可比公司分位数",  PlaceholderType.BVD, "bvd", "数据表", "B1"));
+        // 数据表 B1~B4：独立交易区间表4行数据（B1=可比公司数量, B2=上四分位值, B3=中位值, B4=下四分位值）
+        reg.add(new RegistryEntry("BVD数据模板-数据表B1",                 "BVD-可比公司数量",    PlaceholderType.BVD, "bvd", "数据表", "B1"));
+        reg.add(new RegistryEntry("BVD数据模板-数据表B2",                 "BVD-上四分位值",      PlaceholderType.BVD, "bvd", "数据表", "B2"));
+        reg.add(new RegistryEntry("BVD数据模板-数据表B3",                 "BVD-中位值",          PlaceholderType.BVD, "bvd", "数据表", "B3"));
+        reg.add(new RegistryEntry("BVD数据模板-数据表B4",                 "BVD-下四分位值",      PlaceholderType.BVD, "bvd", "数据表", "B4"));
         reg.add(new RegistryEntry("BVD数据模板-AP_YEAR",                 "BVD-AP年度",        PlaceholderType.BVD, "bvd", "AP",     "A1"));
         reg.add(new RegistryEntry("BVD数据模板-AP_Lead_Sheet_YEAR-13-19", "BVD-AP Lead 13~19行", PlaceholderType.BVD, "bvd", "AP Lead Sheet", "A13"));
         reg.add(new RegistryEntry("BVD数据模板-SummaryYear-第一张表格",   "BVD-SummaryYear表1", PlaceholderType.BVD, "bvd", "SummaryYear", "A1"));
@@ -1139,6 +1143,30 @@ public class ReverseTemplateEngine {
                                             "confirmed", paragraphIndex, tableIndex, rowIndex, cellIndex);
                                 }
                                 log.debug("[ReverseEngine] 年度变体替换[{}]: '{}' -> {}", entry.getDisplayName(), variant, phMark);
+                            }
+                        }
+                        // 年度-2 偏移替换：将「B2年度值-2」对应的年份文本替换为 {{phName}}-2
+                        // 例：B2=24 → fullYear=2024，offsetYear=2022，
+                        //     "2022财务年度" → "{{清单模板-数据表-B2}}-2"
+                        String phMarkMinus2 = phMark + "-2";
+                        List<String> offsetVariants = buildYearVariants(String.valueOf(Integer.parseInt("20" + value) - 2).substring(2));
+                        boolean replacedMinus2 = false;
+                        for (String variant : offsetVariants) {
+                            if (!text.contains(variant)) continue;
+                            char lastChar = variant.charAt(variant.length() - 1);
+                            boolean endsWithChinese = lastChar >= '\u4e00' && lastChar <= '\u9fa5';
+                            String newText = endsWithChinese
+                                    ? text.replace(variant, phMarkMinus2)
+                                    : replaceWithWordBoundary(text, variant, phMarkMinus2);
+                            if (!newText.equals(text)) {
+                                text = newText;
+                                runModified = true;
+                                if (!replacedMinus2) {
+                                    replacedMinus2 = true;
+                                    addMatchedRecord(matchedList, entry, variant, originalText, location,
+                                            "confirmed", paragraphIndex, tableIndex, rowIndex, cellIndex);
+                                }
+                                log.debug("[ReverseEngine] 年度-2偏移替换[{}]: '{}' -> {}", entry.getDisplayName(), variant, phMarkMinus2);
                             }
                         }
                     } else if (isShortAbbrevField(entry)) {
