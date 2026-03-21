@@ -97,8 +97,14 @@ public class ReverseTemplateEngine {
         String sheetName;
         /** 单元格坐标（如 B1），TABLE_CLEAR 类型为 null */
         String cellAddress;
+        /**
+         * TABLE_CLEAR 专用：该占位符对应 Word 表格的前置标题关键词列表。
+         * clearTableBlock 阶段通过表格前最近段落文本 contains 任一关键词来精确绑定表格。
+         * DATA_CELL / LONG_TEXT / BVD 类型为 null。
+         */
+        List<String> titleKeywords;
 
-        /** 构造方法（完整参数） */
+        /** 构造方法（原6参数，DATA_CELL/LONG_TEXT/BVD 使用，titleKeywords=null） */
         RegistryEntry(String placeholderName, String displayName, PlaceholderType type,
                       String dataSource, String sheetName, String cellAddress) {
             this.placeholderName = placeholderName;
@@ -107,6 +113,20 @@ public class ReverseTemplateEngine {
             this.dataSource = dataSource;
             this.sheetName = sheetName;
             this.cellAddress = cellAddress;
+            this.titleKeywords = null;
+        }
+
+        /** 构造方法（7参数，TABLE_CLEAR 使用，额外传入前置标题关键词列表） */
+        RegistryEntry(String placeholderName, String displayName, PlaceholderType type,
+                      String dataSource, String sheetName, String cellAddress,
+                      List<String> titleKeywords) {
+            this.placeholderName = placeholderName;
+            this.displayName = displayName;
+            this.type = type;
+            this.dataSource = dataSource;
+            this.sheetName = sheetName;
+            this.cellAddress = cellAddress;
+            this.titleKeywords = titleKeywords;
         }
     }
 
@@ -137,25 +157,44 @@ public class ReverseTemplateEngine {
         reg.add(new RegistryEntry("清单模板-数据表-B8", "公司概况",   PlaceholderType.LONG_TEXT, "list", "数据表", "B8"));
 
         // ===== 第二类：整表/区域占位符（财务类，TABLE_CLEAR，不读值、整块清空） =====
-        reg.add(new RegistryEntry("清单模板-PL-12行以上的表格内容", "PL12行以上", PlaceholderType.TABLE_CLEAR, "list", null, null));
-        reg.add(new RegistryEntry("清单模板-PL",                   "PL全表",     PlaceholderType.TABLE_CLEAR, "list", null, null));
-        reg.add(new RegistryEntry("清单模板-PL含特殊因素调整",      "PL含特殊因素", PlaceholderType.TABLE_CLEAR, "list", null, null));
-        reg.add(new RegistryEntry("清单模板-1_组织结构及管理架构",  "组织结构",   PlaceholderType.TABLE_CLEAR, "list", null, null));
-        reg.add(new RegistryEntry("清单模板-主要产品-A列中所列所有产品", "主要产品", PlaceholderType.TABLE_CLEAR, "list", null, null));
-        reg.add(new RegistryEntry("清单模板-2_关联公司信息",        "关联公司信息", PlaceholderType.TABLE_CLEAR, "list", null, null));
-        reg.add(new RegistryEntry("清单模板-关联方个人信息",        "关联方个人信息", PlaceholderType.TABLE_CLEAR, "list", null, null));
-        reg.add(new RegistryEntry("清单模板-关联关系变化情况",      "关联关系变化", PlaceholderType.TABLE_CLEAR, "list", null, null));
-        reg.add(new RegistryEntry("清单模板-关联交易汇总表",        "关联交易汇总", PlaceholderType.TABLE_CLEAR, "list", null, null));
-        reg.add(new RegistryEntry("清单模板-5_客户清单",            "客户清单",   PlaceholderType.TABLE_CLEAR, "list", null, null));
-        reg.add(new RegistryEntry("清单模板-4_供应商清单",          "供应商清单", PlaceholderType.TABLE_CLEAR, "list", null, null));
-        reg.add(new RegistryEntry("清单模板-6_劳务交易表",          "劳务交易表", PlaceholderType.TABLE_CLEAR, "list", null, null));
-        reg.add(new RegistryEntry("清单模板-劳务成本费用归集",      "劳务成本费用", PlaceholderType.TABLE_CLEAR, "list", null, null));
-        reg.add(new RegistryEntry("清单模板-资金融通",              "资金融通",   PlaceholderType.TABLE_CLEAR, "list", null, null));
-        reg.add(new RegistryEntry("清单模板-有形资产信息",          "有形资产信息", PlaceholderType.TABLE_CLEAR, "list", null, null));
-        reg.add(new RegistryEntry("清单模板-功能风险汇总表",        "功能风险汇总", PlaceholderType.TABLE_CLEAR, "list", null, null));
-        reg.add(new RegistryEntry("清单模板-3_分部财务数据",        "分部财务数据", PlaceholderType.TABLE_CLEAR, "list", null, null));
-        reg.add(new RegistryEntry("清单模板-公司经营背景资料",      "公司经营背景", PlaceholderType.TABLE_CLEAR, "list", null, null));
-        reg.add(new RegistryEntry("清单数据模板-公司间资金融通交易总结", "公司间资金融通", PlaceholderType.TABLE_CLEAR, "list", null, null));
+        reg.add(new RegistryEntry("清单模板-PL-12行以上的表格内容", "PL12行以上", PlaceholderType.TABLE_CLEAR, "list", null, null,
+                List.of("损益", "利润表", "PL", "成本收入", "成本加成率", "营业收入", "毛利")));
+        reg.add(new RegistryEntry("清单模板-PL",                   "PL全表",     PlaceholderType.TABLE_CLEAR, "list", null, null,
+                List.of("损益", "利润表", "PL", "成本收入", "成本加成率", "营业收入", "毛利")));
+        reg.add(new RegistryEntry("清单模板-PL含特殊因素调整",      "PL含特殊因素", PlaceholderType.TABLE_CLEAR, "list", null, null,
+                List.of("含特殊", "特殊因素", "调整后", "PL调整")));
+        reg.add(new RegistryEntry("清单模板-1_组织结构及管理架构",  "组织结构",   PlaceholderType.TABLE_CLEAR, "list", null, null,
+                List.of("组织结构", "部门结构", "管理架构", "组织架构")));
+        reg.add(new RegistryEntry("清单模板-主要产品-A列中所列所有产品", "主要产品", PlaceholderType.TABLE_CLEAR, "list", null, null,
+                List.of("主要产品", "产品清单", "产品信息", "产品列表")));
+        reg.add(new RegistryEntry("清单模板-2_关联公司信息",        "关联公司信息", PlaceholderType.TABLE_CLEAR, "list", null, null,
+                List.of("关联公司", "关联方公司", "关联企业")));
+        reg.add(new RegistryEntry("清单模板-关联方个人信息",        "关联方个人信息", PlaceholderType.TABLE_CLEAR, "list", null, null,
+                List.of("关联方个人", "关联个人", "个人信息")));
+        reg.add(new RegistryEntry("清单模板-关联关系变化情况",      "关联关系变化", PlaceholderType.TABLE_CLEAR, "list", null, null,
+                List.of("关联关系变化", "关联变化", "关系变化")));
+        reg.add(new RegistryEntry("清单模板-关联交易汇总表",        "关联交易汇总", PlaceholderType.TABLE_CLEAR, "list", null, null,
+                List.of("关联交易汇总", "关联交易总", "关联交易合计")));
+        reg.add(new RegistryEntry("清单模板-5_客户清单",            "客户清单",   PlaceholderType.TABLE_CLEAR, "list", null, null,
+                List.of("客户清单", "主要客户", "前五大客户", "主要客户情况")));
+        reg.add(new RegistryEntry("清单模板-4_供应商清单",          "供应商清单", PlaceholderType.TABLE_CLEAR, "list", null, null,
+                List.of("供应商清单", "主要供应商", "前五大供应商", "供应商情况")));
+        reg.add(new RegistryEntry("清单模板-6_劳务交易表",          "劳务交易表", PlaceholderType.TABLE_CLEAR, "list", null, null,
+                List.of("劳务交易", "劳务服务", "劳务收费")));
+        reg.add(new RegistryEntry("清单模板-劳务成本费用归集",      "劳务成本费用", PlaceholderType.TABLE_CLEAR, "list", null, null,
+                List.of("劳务成本", "费用归集", "成本归集")));
+        reg.add(new RegistryEntry("清单模板-资金融通",              "资金融通",   PlaceholderType.TABLE_CLEAR, "list", null, null,
+                List.of("资金融通", "资金借贷", "融通")));
+        reg.add(new RegistryEntry("清单模板-有形资产信息",          "有形资产信息", PlaceholderType.TABLE_CLEAR, "list", null, null,
+                List.of("有形资产", "固定资产", "资产信息")));
+        reg.add(new RegistryEntry("清单模板-功能风险汇总表",        "功能风险汇总", PlaceholderType.TABLE_CLEAR, "list", null, null,
+                List.of("功能风险", "功能分析", "风险汇总", "功能与风险")));
+        reg.add(new RegistryEntry("清单模板-3_分部财务数据",        "分部财务数据", PlaceholderType.TABLE_CLEAR, "list", null, null,
+                List.of("分部财务", "财务数据", "分部数据")));
+        reg.add(new RegistryEntry("清单模板-公司经营背景资料",      "公司经营背景", PlaceholderType.TABLE_CLEAR, "list", null, null,
+                List.of("经营背景", "公司背景", "背景资料", "经营情况")));
+        reg.add(new RegistryEntry("清单数据模板-公司间资金融通交易总结", "公司间资金融通", PlaceholderType.TABLE_CLEAR, "list", null, null,
+                List.of("公司间资金", "资金融通交易总结", "公司间融通", "资金融通总结")));
 
         // ===== 第三类：行业情况长文本占位符（清单 → 行业情况 Sheet B1~B5） =====
         // 来源：标准模板"行业情况" Sheet，B1~B5 各为一段长文本
@@ -255,6 +294,11 @@ public class ReverseTemplateEngine {
         private PlaceholderType placeholderType;
         /** 可读展示名（用于日志/前端提示，如"企业全称"），来自注册表 displayName */
         private String displayName;
+        /**
+         * TABLE_CLEAR 专用：前置标题关键词列表，来自注册表 RegistryEntry.titleKeywords。
+         * clearTableBlock 阶段用于精确匹配表格前置标题段落，其余类型为 null。
+         */
+        private List<String> titleKeywords;
     }
 
     /** 待确认的占位符项（返回给前端供人工确认） */
@@ -474,7 +518,7 @@ public class ReverseTemplateEngine {
             if ("bvd".equals(reg.getDataSource())) continue;
 
             if (reg.getType() == PlaceholderType.TABLE_CLEAR) {
-                // TABLE_CLEAR：不读值，直接生成清空标记条目
+                // TABLE_CLEAR：不读值，直接生成清空标记条目，携带标题关键词用于精确表格匹配
                 ExcelEntry entry = new ExcelEntry();
                 entry.setValue(null);
                 entry.setPlaceholderName(reg.getPlaceholderName());
@@ -484,6 +528,7 @@ public class ReverseTemplateEngine {
                 entry.setSourceField(null);
                 entry.setLongText(false);
                 entry.setPlaceholderType(PlaceholderType.TABLE_CLEAR);
+                entry.setTitleKeywords(reg.getTitleKeywords());
                 tableClearEntries.add(entry);
                 continue;
             }
@@ -1320,18 +1365,22 @@ public class ReverseTemplateEngine {
     }
 
     /**
-     * TABLE_CLEAR 类型整块清空处理。
+     * TABLE_CLEAR 类型整块清空处理（路径A：精确标题匹配）。
      *
-     * <p>策略：遍历 Word 文档中所有表格，识别"数字列为主"的财务表格，
-     * 将满足条件的列内容全部替换为 {@code {{placeholderName}}} 占位符标记。
+     * <p><b>两阶段策略：</b>
+     * <ol>
+     *   <li><b>Phase 1</b>：遍历 {@code doc.getBodyElements()} 建立"表格 → 前置标题段落文本"映射表
+     *       （维护滑动窗口保留最近3个非空段落）</li>
+     *   <li><b>Phase 2</b>：每个 TABLE_CLEAR 条目通过其 {@code titleKeywords} 在映射表中精确查找对应表格，
+     *       找到后清空该表格数字列并从候选池中移除（防止复用）；
+     *       未命中关键词时 fallback 到 {@link #isFinancialTable} 的第一个未绑定财务表格；
+     *       依然找不到则加入 unmatchedEntries。</li>
+     * </ol>
      *
-     * <p>初期实现（可扩展）：若表格首列为文字、其余列为数字内容，则对数字列逐格清空替换为占位符。
-     * 若无法定位，降级为 warn 日志 + 加入 unmatchedEntries，不抛异常。
-     *
-     * @param doc             Word 文档
+     * @param doc               Word 文档
      * @param tableClearEntries TABLE_CLEAR 类型的 ExcelEntry 列表
-     * @param matchedList     用于记录成功处理的条目
-     * @param unmatchedEntries 用于记录无法定位的条目（降级保护）
+     * @param matchedList       用于记录成功处理的条目
+     * @param unmatchedEntries  用于记录无法定位的条目（降级保护）
      * @return 实际清空处理的单元格数
      */
     private int clearTableBlock(XWPFDocument doc,
@@ -1341,88 +1390,178 @@ public class ReverseTemplateEngine {
         if (tableClearEntries == null || tableClearEntries.isEmpty()) return 0;
         int clearedCount = 0;
 
-        // 预先收集文档全部表格
-        List<XWPFTable> tables = doc.getTables();
+        // ===== Phase 1：遍历 body elements，建立 tableHeadMap（表格 → 前置标题文本） =====
+        // key: 表格在文档中的顺序索引（由 doc.getTables() 的顺序确定），value: 前置标题段落拼接文本
+        // 同时维护 tableIndexMap 用于记录表格对应 tIdx（供日志/positionJson 使用）
+        List<XWPFTable> allTables = doc.getTables();
+        Map<XWPFTable, String> tableHeadMap = new LinkedHashMap<>();
+        Map<XWPFTable, Integer> tableIndexMap = new LinkedHashMap<>();
 
+        {
+            // 滑动窗口：保留最近 3 个非空段落文本
+            java.util.Deque<String> recentParas = new java.util.ArrayDeque<>(3);
+            int tIdx = 0;
+            for (org.apache.poi.xwpf.usermodel.IBodyElement elem : doc.getBodyElements()) {
+                if (elem instanceof XWPFParagraph para) {
+                    String text = para.getText();
+                    if (text != null && !text.isBlank()) {
+                        if (recentParas.size() >= 3) recentParas.pollFirst();
+                        recentParas.addLast(text.trim());
+                    }
+                } else if (elem instanceof XWPFTable table) {
+                    // 将滑动窗口中的段落拼接为候选标题文本
+                    String candidateTitle = String.join(" ", recentParas);
+                    tableHeadMap.put(table, candidateTitle);
+                    tableIndexMap.put(table, tIdx);
+                    tIdx++;
+                    // 遇到表格后不清空滑动窗口，下一个表格仍能沿用附近段落
+                }
+            }
+        }
+
+        // 用于 fallback 的"未被精确绑定的财务表格"候选池（有序，按 tIdx 升序）
+        Set<XWPFTable> boundTables = new LinkedHashSet<>();
+
+        // ===== Phase 2：按条目查找对应表格 =====
         for (ExcelEntry entry : tableClearEntries) {
             String phMark = "{{" + entry.getPlaceholderName() + "}}";
-            boolean handled = false;
+            List<String> keywords = entry.getTitleKeywords();
 
-            for (int tIdx = 0; tIdx < tables.size(); tIdx++) {
-                XWPFTable table = tables.get(tIdx);
-                if (!isFinancialTable(table)) continue;
+            XWPFTable targetTable = null;
+            int targetIdx = -1;
 
-                // 对该财务表格的数字列（除首列外）逐格清空，替换为占位符标记
-                List<XWPFTableRow> rows = table.getRows();
-                if (rows.isEmpty()) continue;
-
-                int colCount = rows.get(0).getTableCells().size();
-                for (XWPFTableRow row : rows) {
-                    List<XWPFTableCell> cells = row.getTableCells();
-                    for (int cIdx = 1; cIdx < cells.size() && cIdx < colCount; cIdx++) {
-                        XWPFTableCell cell = cells.get(cIdx);
-                        String cellText = cell.getText().trim();
-                        if (cellText.isBlank()) continue;
-                        // 只清空数字类内容（整数/小数/千分位/百分比/负数）
-                        if (!cellText.matches("-?[\\d,]+(\\.[\\d]+)?%?") &&
-                                !cellText.matches("-?[\\d,.\\s]+")) continue;
-
-                        // 清空该单元格所有段落，写入占位符标记
-                        for (XWPFParagraph para : cell.getParagraphs()) {
-                            List<XWPFRun> cellRuns = para.getRuns();
-                            if (!cellRuns.isEmpty()) {
-                                cellRuns.get(0).setText(phMark, 0);
-                                for (int r = 1; r < cellRuns.size(); r++) {
-                                    cellRuns.get(r).setText("", 0);
-                                }
-                            }
+            // 2a. 通过 titleKeywords 精确匹配
+            if (keywords != null && !keywords.isEmpty()) {
+                outer:
+                for (Map.Entry<XWPFTable, String> e : tableHeadMap.entrySet()) {
+                    if (boundTables.contains(e.getKey())) continue; // 已被其他条目绑定
+                    String headText = e.getValue();
+                    for (String kw : keywords) {
+                        if (headText.contains(kw)) {
+                            targetTable = e.getKey();
+                            targetIdx = tableIndexMap.getOrDefault(e.getKey(), -1);
+                            log.info("[ReverseEngine-TableClear] 占位符 '{}' 通过关键词 '{}' 精确匹配到表格#{}，前置标题：[{}]",
+                                    entry.getPlaceholderName(), kw, targetIdx, headText);
+                            break outer;
                         }
-                        clearedCount++;
                     }
                 }
-                handled = true;
-                // 记录匹配
-                MatchedPlaceholder mp = new MatchedPlaceholder();
-                mp.setPlaceholderName(entry.getPlaceholderName());
-                mp.setExpectedValue("[TABLE_CLEAR]");
-                mp.setActualValue("[整表清空]");
-                mp.setLocation("表格#" + tIdx);
-                mp.setStatus("confirmed");
-                mp.setDataSource(entry.getDataSource());
-                mp.setSourceSheet(entry.getSourceSheet());
-                mp.setSourceField(null);
-                mp.setModuleName(entry.getSourceSheet() != null ? entry.getSourceSheet() : "财务数据");
-                mp.setModuleCode(sheetNameToCode(mp.getModuleName()));
-                mp.setPositionJson("{\"elementType\":\"table\",\"tableIndex\":" + tIdx + "}");
-                matchedList.add(mp);
-                log.info("[ReverseEngine-TableClear] 占位符 '{}' 已清空表格#{}，共{}个单元格",
-                        entry.getPlaceholderName(), tIdx, clearedCount);
-                break; // 每个 TABLE_CLEAR 条目只处理首个匹配表格
             }
 
-            if (!handled) {
-                log.warn("[ReverseEngine-TableClear] 占位符 '{}' 未能定位到财务表格，加入未匹配列表",
+            // 2b. 精确匹配失败 → fallback：取第一个未绑定的财务表格
+            if (targetTable == null) {
+                for (Map.Entry<XWPFTable, Integer> e : tableIndexMap.entrySet()) {
+                    XWPFTable t = e.getKey();
+                    if (boundTables.contains(t)) continue;
+                    if (isFinancialTable(t)) {
+                        targetTable = t;
+                        targetIdx = e.getValue();
+                        log.warn("[ReverseEngine-TableClear] 占位符 '{}' 关键词未命中，fallback 到财务表格#{}（前置标题：[{}]）",
+                                entry.getPlaceholderName(), targetIdx,
+                                tableHeadMap.getOrDefault(t, ""));
+                        break;
+                    }
+                }
+            }
+
+            if (targetTable == null) {
+                log.warn("[ReverseEngine-TableClear] 占位符 '{}' 未能定位到表格，加入未匹配列表",
                         entry.getPlaceholderName());
                 unmatchedEntries.add(entry);
+                continue;
             }
+
+            // 标记该表格已绑定，防止其他条目复用
+            boundTables.add(targetTable);
+
+            // 清空该表格数字列
+            List<XWPFTableRow> rows = targetTable.getRows();
+            if (rows.isEmpty()) {
+                unmatchedEntries.add(entry);
+                continue;
+            }
+            int colCount = rows.get(0).getTableCells().size();
+            int cellsCleared = 0;
+            for (XWPFTableRow row : rows) {
+                List<XWPFTableCell> cells = row.getTableCells();
+                for (int cIdx = 1; cIdx < cells.size() && cIdx < colCount; cIdx++) {
+                    XWPFTableCell cell = cells.get(cIdx);
+                    String cellText = cell.getText().trim();
+                    if (cellText.isBlank()) continue;
+                    // 只清空数字类内容（整数/小数/千分位/百分比/负数）
+                    if (!cellText.matches("-?[\\d,]+(\\.[\\d]+)?%?") &&
+                            !cellText.matches("-?[\\d,.\\s]+")) continue;
+
+                    // 清空该单元格所有段落，写入占位符标记
+                    for (XWPFParagraph para : cell.getParagraphs()) {
+                        List<XWPFRun> cellRuns = para.getRuns();
+                        if (!cellRuns.isEmpty()) {
+                            cellRuns.get(0).setText(phMark, 0);
+                            for (int r = 1; r < cellRuns.size(); r++) {
+                                cellRuns.get(r).setText("", 0);
+                            }
+                        }
+                    }
+                    cellsCleared++;
+                }
+            }
+            clearedCount += cellsCleared;
+
+            // 记录匹配
+            MatchedPlaceholder mp = new MatchedPlaceholder();
+            mp.setPlaceholderName(entry.getPlaceholderName());
+            mp.setExpectedValue("[TABLE_CLEAR]");
+            mp.setActualValue("[整表清空]");
+            mp.setLocation("表格#" + targetIdx);
+            mp.setStatus("confirmed");
+            mp.setDataSource(entry.getDataSource());
+            mp.setSourceSheet(entry.getSourceSheet());
+            mp.setSourceField(null);
+            mp.setModuleName(entry.getSourceSheet() != null ? entry.getSourceSheet() : "财务数据");
+            mp.setModuleCode(sheetNameToCode(mp.getModuleName()));
+            mp.setPositionJson("{\"elementType\":\"table\",\"tableIndex\":" + targetIdx + "}");
+            matchedList.add(mp);
+            log.info("[ReverseEngine-TableClear] 占位符 '{}' 已清空表格#{}，本次清空{}个单元格（累计{}）",
+                    entry.getPlaceholderName(), targetIdx, cellsCleared, clearedCount);
         }
         return clearedCount;
     }
 
     /**
-     * 判断一个 Word 表格是否为财务数字表（用于 TABLE_CLEAR 定位）。
+     * 判断一个 Word 表格是否为财务数字表（用于 TABLE_CLEAR fallback 定位）。
      *
      * <p>判断规则：
      * <ul>
      *   <li>行数 &ge; 3（避免小表格误判）</li>
      *   <li>列数 &ge; 2（至少有一个数字列）</li>
      *   <li>数据行（跳过首行表头）中，数字内容单元格占比 &ge; 40%</li>
+     *   <li><b>排除</b>：若首列任意单元格含 {@code x.x.x} 格式章节编号（如 2.2.2、4.1），则不视为财务表</li>
+     *   <li><b>排除</b>：若表格首行含"报告索引"或"章节"文本，则不视为财务表</li>
      * </ul>
      */
     private boolean isFinancialTable(XWPFTable table) {
         List<XWPFTableRow> rows = table.getRows();
         if (rows.size() < 3) return false;
         if (rows.get(0).getTableCells().size() < 2) return false;
+
+        // 排除规则1：首行含"报告索引"或"章节"关键词（同期资料本地文档对照表等）
+        String headerRowText = rows.get(0).getTableCells().stream()
+                .map(c -> c.getText().trim())
+                .collect(java.util.stream.Collectors.joining(" "));
+        if (headerRowText.contains("报告索引") || headerRowText.contains("章节")) {
+            return false;
+        }
+
+        // 排除规则2：首列（含表头行）存在章节编号格式（x.x 或 x.x.x 等）
+        java.util.regex.Pattern chapterPattern = java.util.regex.Pattern.compile("^\\d+(\\.\\d+)+$");
+        for (XWPFTableRow row : rows) {
+            List<XWPFTableCell> cells = row.getTableCells();
+            if (cells.isEmpty()) continue;
+            String firstCellText = cells.get(0).getText().trim();
+            if (chapterPattern.matcher(firstCellText).matches()) {
+                return false;
+            }
+        }
 
         int totalDataCells = 0;
         int numericCells = 0;
