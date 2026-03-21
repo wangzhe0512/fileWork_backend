@@ -166,36 +166,62 @@ public class ReportGenerateEngine {
     }
 
     /**
-     * 从行数据中按 sourceField 提取值，兼容两种 Sheet 布局：
+     * 从行数据中按 sourceField 提取值，兼容三种 Sheet 布局：
      * <ul>
-     *   <li><b>竖向布局</b>（如清单"数据表"）：每行 A列=字段地址（B1/B2...），B列=值。
-     *       遍历所有行，找 A列 == sourceField 的那行，返回 B列值。</li>
+     *   <li><b>Excel 单元格地址</b>（如清单"数据表"）：sourceField 形如 "B1"、"B3"，
+     *       列字母对应 Excel 列（A=0,B=1...），行号为 1-based。
+     *       直接按行号和列索引取值。</li>
+     *   <li><b>竖向布局</b>：A列=字段名，B列=值，按 sourceField 匹配 A列文字。</li>
      *   <li><b>横向布局</b>（传统表头行）：第0行为列名表头，第1行为数据行，
      *       按 sourceField 匹配列标题后取对应列的第1行值。</li>
      * </ul>
-     * 优先尝试竖向布局；若未命中再尝试横向布局。
      */
     private String extractTextValue(List<Map<Integer, Object>> rows, String sheetName, String sourceField) {
         if (rows == null || rows.isEmpty() || sourceField == null) return null;
 
-        // 优先：竖向布局 — A列(index=0) 的值与 sourceField 匹配，则取 B列(index=1)
+        String field = sourceField.trim();
+
+        // 优先：Excel 单元格地址格式，如 "B1"、"C3"（字母+数字）
+        if (field.matches("[A-Za-z]+\\d+")) {
+            // 解析列字母 -> 列索引（A=0, B=1, C=2...）
+            String colLetters = field.replaceAll("\\d", "").toUpperCase();
+            int colIndex = 0;
+            for (char c : colLetters.toCharArray()) {
+                colIndex = colIndex * 26 + (c - 'A' + 1);
+            }
+            colIndex -= 1; // 转为 0-based
+
+            // 解析行号（1-based -> 0-based）
+            int rowIndex = Integer.parseInt(field.replaceAll("[A-Za-z]", "")) - 1;
+
+            if (rowIndex >= 0 && rowIndex < rows.size()) {
+                Object val = rows.get(rowIndex).get(colIndex);
+                if (val != null && !val.toString().isBlank()) {
+                    return val.toString().trim();
+                }
+            }
+            log.warn("[ReportEngine] 单元格地址 '{}' 无数据（行={}, 列={}）", field, rowIndex, colIndex);
+            return null;
+        }
+
+        // 次优：竖向布局 — A列(index=0) 的值与 sourceField 匹配，则取 B列(index=1)
         for (Map<Integer, Object> row : rows) {
             Object aCell = row.get(0);
-            if (aCell != null && sourceField.equalsIgnoreCase(aCell.toString().trim())) {
+            if (aCell != null && field.equalsIgnoreCase(aCell.toString().trim())) {
                 Object bCell = row.get(1);
                 if (bCell != null && !bCell.toString().isBlank()) {
                     return bCell.toString().trim();
                 }
-                return null; // 找到行但值为空
+                return null;
             }
         }
 
         // 回退：横向布局 — 第0行为表头，sourceField 匹配列名
         if (rows.size() < 2) return null;
         Map<Integer, Object> headerRow = rows.get(0);
-        Integer colIndex = findColumnIndex(headerRow, sourceField);
+        Integer colIndex = findColumnIndex(headerRow, field);
         if (colIndex == null) {
-            log.warn("[ReportEngine] 未找到列 '{}' 的索引（竖向/横向均未匹配）", sourceField);
+            log.warn("[ReportEngine] 未找到列 '{}' 的索引（三种布局均未匹配）", field);
             return null;
         }
         Map<Integer, Object> dataRow = rows.get(1);
