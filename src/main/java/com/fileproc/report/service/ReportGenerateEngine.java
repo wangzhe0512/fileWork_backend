@@ -234,9 +234,36 @@ public class ReportGenerateEngine {
 
     /**
      * 从行数据中提取完整表格数据（含表头行）。
+     *
+     * <p>PL Sheet 专用截取：当 sheetName 为 "PL" 或 "PL含特殊因素调整" 时，
+     * 只取 rows[3..11]（跳过行0空行、行1表头、行2空行，以及行12以后的关联销售明细），
+     * 前置一个空虚拟表头行（index=0），使 fillTableWithData 的 startDataRow=1 跳过它，
+     * 从而保留 Word 表格原有表头（"金额（人民币元）" 等），只用 PL 数据填充数据行。
+     * </p>
      */
     private List<List<Object>> extractTableData(List<Map<Integer, Object>> rows, String sheetName) {
         if (rows.isEmpty()) return Collections.emptyList();
+
+        // PL Sheet 专用截取逻辑：只取行3~11（共9行数据）
+        if ("PL".equals(sheetName) || "PL含特殊因素调整".equals(sheetName)) {
+            List<List<Object>> result = new ArrayList<>();
+            // 虚拟表头行（空列表），供 fillTableWithData 的 startDataRow=1 跳过，保留 Word 原有表头
+            result.add(Collections.emptyList());
+            // 截取数据行：rows[3..11]，共9行（跳过空行、表头行、空行以及下方的关联销售明细）
+            int dataStart = 3;
+            int dataEnd = Math.min(12, rows.size()); // 行12以后是关联销售明细，不包含
+            for (int i = dataStart; i < dataEnd; i++) {
+                Map<Integer, Object> row = rows.get(i);
+                // 只保留前3列（项目/公式/金额），忽略多余列
+                List<Object> line = new ArrayList<>();
+                for (int col = 0; col < 3; col++) {
+                    line.add(row.getOrDefault(col, ""));
+                }
+                result.add(line);
+            }
+            log.debug("[ReportEngine] PL Sheet '{}' 截取数据行 {}~{}，共 {} 行", sheetName, dataStart, dataEnd - 1, result.size() - 1);
+            return result;
+        }
 
         List<List<Object>> result = new ArrayList<>();
         // 确定最大列数

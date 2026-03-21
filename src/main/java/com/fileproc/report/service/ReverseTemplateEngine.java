@@ -159,13 +159,11 @@ public class ReverseTemplateEngine {
         reg.add(new RegistryEntry("清单模板-数据表-B8", "公司概况",   PlaceholderType.LONG_TEXT, "list", "数据表", "B8"));
 
         // ===== 第二类：整表/区域占位符，分两种策略 =====
-        // TABLE_CLEAR（财务表）：仅清数字列，保留文字描述列
-        reg.add(new RegistryEntry("清单模板-PL-12行以上的表格内容", "PL12行以上", PlaceholderType.TABLE_CLEAR, "list", null, null,
-                List.of("损益", "利润表", "PL", "成本收入", "成本加成率", "营业收入", "毛利")));
-        reg.add(new RegistryEntry("清单模板-PL",                   "PL全表",     PlaceholderType.TABLE_CLEAR, "list", null, null,
-                List.of("损益", "利润表", "PL", "成本收入", "成本加成率", "营业收入", "毛利")));
-        reg.add(new RegistryEntry("清单模板-PL含特殊因素调整",      "PL含特殊因素", PlaceholderType.TABLE_CLEAR, "list", null, null,
-                List.of("含特殊", "特殊因素", "调整后", "PL调整")));
+        // TABLE_CLEAR_FULL（财务状况表整表展开）：整张表全部清空，仅第一格写占位符，生成时从 PL Sheet 逐行展开三列数据
+        reg.add(new RegistryEntry("清单模板-PL",                   "PL全表",       PlaceholderType.TABLE_CLEAR_FULL, "list", "PL", null,
+                List.of("财务状况")));
+        reg.add(new RegistryEntry("清单模板-PL含特殊因素调整",      "PL含特殊因素", PlaceholderType.TABLE_CLEAR_FULL, "list", "PL含特殊因素调整", null,
+                List.of("含特殊", "特殊因素调整")));
 
         // TABLE_CLEAR_FULL（非财务整表）：整张表全部清空，仅第一格写占位符
         reg.add(new RegistryEntry("清单模板-1_组织结构及管理架构",  "组织结构",   PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
@@ -1568,6 +1566,15 @@ public class ReverseTemplateEngine {
                     String headText = e.getValue();
                     for (String kw : keywords) {
                         if (headText.contains(kw)) {
+                            // 精确匹配命中后，对所有 TABLE_CLEAR_FULL 类型均排除独立交易区间表：
+                            // 独立交易区间表（首列含"四分位区间"等关键词）仅应由 BVD 占位符消费，
+                            // 任何清单模板的表格占位符（组织结构/分部财务数据/PL 等）都不应绑到它上面
+                            if (entry.getPlaceholderType() == PlaceholderType.TABLE_CLEAR_FULL
+                                    && isIndependentRangeTable(e.getKey())) {
+                                log.warn("[ReverseEngine-TableClear] 占位符 '{}' 关键词 '{}' 命中表格#{} 但该表为独立交易区间表，跳过，继续搜索",
+                                        entry.getPlaceholderName(), kw, tableIndexMap.getOrDefault(e.getKey(), -1));
+                                break; // 跳出内层 keywords 循环，继续尝试下一张表
+                            }
                             targetTable = e.getKey();
                             targetIdx = tableIndexMap.getOrDefault(e.getKey(), -1);
                             log.info("[ReverseEngine-TableClear] 占位符 '{}' 通过关键词 '{}' 精确匹配到表格#{}，前置标题：[{}]",
@@ -1691,6 +1698,24 @@ public class ReverseTemplateEngine {
     }
 
     /**
+     * 判断一个 Word 表格是否为独立交易区间表。
+     * <p>检测依据：首列任意单元格含"可比公司数量"/"上四分位"/"中位值"/"下四分位"/"四分位区间"关键词。</p>
+     */
+    private boolean isIndependentRangeTable(XWPFTable table) {
+        for (XWPFTableRow row : table.getRows()) {
+            List<XWPFTableCell> cells = row.getTableCells();
+            if (cells.isEmpty()) continue;
+            String firstCellText = cells.get(0).getText().trim();
+            if (firstCellText.contains("可比公司数量") || firstCellText.contains("上四分位")
+                    || firstCellText.contains("中位值") || firstCellText.contains("下四分位")
+                    || firstCellText.contains("四分位区间")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * 判断一个 Word 表格是否为财务数字表（用于 TABLE_CLEAR fallback 定位）。
      *
      * <p>判断规则：
@@ -1701,6 +1726,7 @@ public class ReverseTemplateEngine {
      *   <li><b>排除</b>：若首列任意单元格含 {@code x.x.x} 格式章节编号（如 2.2.2、4.1），则不视为财务表</li>
      *   <li><b>排除</b>：若表格首行含"报告索引"或"章节"文本，则不视为财务表</li>
      *   <li><b>排除</b>：若表格首行含"主要部门"或"人数"，则不视为财务表（部门结构表）</li>
+     *   <li><b>排除</b>：若表格首行含"关联交易类型"，则不视为财务表（关联交易汇总表）</li>
      *   <li><b>排除</b>：若首列含"四分位区间"等关键词，则不视为财务表（独立交易区间表）</li>
      * </ul>
      */
@@ -1733,17 +1759,16 @@ public class ReverseTemplateEngine {
             return false;
         }
 
-        // 排除规则5：独立交易区间表（首列含四分位/可比公司相关关键词）
-        for (XWPFTableRow row : rows) {
-            List<XWPFTableCell> cells = row.getTableCells();
-            if (cells.isEmpty()) continue;
-            String firstCellText = cells.get(0).getText().trim();
-            if (firstCellText.contains("可比公司数量") || firstCellText.contains("上四分位")
-                    || firstCellText.contains("中位值") || firstCellText.contains("下四分位")
-                    || firstCellText.contains("四分位区间")) {
-                return false;
-            }
+        // 排除规则4：关联交易汇总表（表头含"关联交易类型"关键词）
+        if (headerRowText.contains("关联交易类型")) {
+            return false;
         }
+
+        // 排除规则5：独立交易区间表（首列含四分位/可比公司相关关键词）
+        if (isIndependentRangeTable(table)) {
+            return false;
+        }
+
 
         int totalDataCells = 0;
         int numericCells = 0;
