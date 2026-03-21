@@ -112,15 +112,12 @@ public class ReportService {
             throw BizException.of(400, "该年度已存在归档报告，不可重复生成");
         }
 
-        // 若有 editing 记录（上次生成中/失败），自动清理后重新生成
-        reportMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<Report>()
+        // 若有 editing 记录（上次生成中/失败），利用 @TableLogic 的 delete 方法自动软删除
+        reportMapper.delete(new LambdaQueryWrapper<Report>()
                 .eq(Report::getTenantId, tenantId)
                 .eq(Report::getCompanyId, companyId)
                 .eq(Report::getYear, year)
                 .eq(Report::getStatus, ReportStatus.EDITING.getCode())
-                .eq(Report::getDeleted, 0)
-                .set(Report::getDeleted, 1)
-                .set(Report::getUpdatedAt, LocalDateTime.now())
         );
 
         // 先落库，状态为 pending，立即返回
