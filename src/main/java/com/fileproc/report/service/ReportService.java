@@ -112,13 +112,17 @@ public class ReportService {
             throw BizException.of(400, "该年度已存在归档报告，不可重复生成");
         }
 
-        // 若有 editing 记录（上次生成中/失败），利用 @TableLogic 的 delete 方法自动软删除
-        reportMapper.delete(new LambdaQueryWrapper<Report>()
-                .eq(Report::getTenantId, tenantId)
-                .eq(Report::getCompanyId, companyId)
-                .eq(Report::getYear, year)
-                .eq(Report::getStatus, ReportStatus.EDITING.getCode())
+        // 若有 editing 记录，说明报告正在生成中，拒绝重复操作
+        Long editingCount = reportMapper.selectCount(
+                new LambdaQueryWrapper<Report>()
+                        .eq(Report::getTenantId, tenantId)
+                        .eq(Report::getCompanyId, companyId)
+                        .eq(Report::getYear, year)
+                        .eq(Report::getStatus, ReportStatus.EDITING.getCode())
         );
+        if (editingCount > 0) {
+            throw BizException.of(400, "该年度报告正在生成中，请稍后再试");
+        }
 
         // 先落库，状态为 pending，立即返回
         Report report = new Report();
@@ -232,6 +236,18 @@ public class ReportService {
         // P1：文件类型白名单校验
         if (!ALLOWED_REPORT_EXT.contains(ext)) {
             throw BizException.of("不支持的报告文件类型，仅允许：" + ALLOWED_REPORT_EXT);
+        }
+
+        // 校验是否已有归档（history）记录：已归档或已上传则不可重复
+        Long historyCount = reportMapper.selectCount(
+                new LambdaQueryWrapper<Report>()
+                        .eq(Report::getTenantId, tenantId)
+                        .eq(Report::getCompanyId, companyId)
+                        .eq(Report::getYear, year)
+                        .eq(Report::getStatus, ReportStatus.HISTORY.getCode())
+        );
+        if (historyCount > 0) {
+            throw BizException.of(400, "该年度已存在归档报告，不可重复上传");
         }
 
         // 校验Excel文件类型（如果上传了）

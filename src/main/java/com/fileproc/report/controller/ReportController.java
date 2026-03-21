@@ -94,7 +94,7 @@ public class ReportController {
     }
 
     @Operation(summary = "手动上传历史报告")
-    @PreAuthorize("hasAuthority('report:create')")
+    @PreAuthorize("hasAuthority('report:generate')")
     @PostMapping(value = "/upload", consumes = "multipart/form-data")
     public R<Report> upload(
             @RequestPart("file") MultipartFile file,

@@ -129,9 +129,15 @@ public class ReportAsyncService {
             );
 
             long fileSize = Files.size(Paths.get(absoluteOutputPath));
+            // 写入前再次确认记录未被软删除（用户触发重新生成时会软删除旧记录）
+            if (reportMapper.selectById(report.getId()) == null) {
+                log.warn("[ReportAsyncService] 报告已被取消/覆盖，放弃写入结果（新架构）: reportId={}", report.getId());
+                return;
+            }
             report.setFilePath(relativeDir + fileName);
             report.setFileSize(formatSize(fileSize));
             report.setTemplateId(companyTemplate.getId());
+            report.setStatus(ReportStatus.HISTORY.getCode());
             report.setGenerationStatus(ReportStatus.SUCCESS.getCode());
             report.setGenerationError(null);
             report.setUpdatedAt(LocalDateTime.now());
@@ -140,6 +146,11 @@ public class ReportAsyncService {
             log.info("[ReportAsyncService] 报告生成成功（新架构）: {}", absoluteOutputPath);
         } catch (Exception e) {
             log.error("[ReportAsyncService] 报告生成失败（新架构）: reportId={}, err={}", report.getId(), e.getMessage(), e);
+            // 写入失败状态前同样校验记录存活性
+            if (reportMapper.selectById(report.getId()) == null) {
+                log.warn("[ReportAsyncService] 报告已被取消/覆盖，放弃写入失败状态（新架构）: reportId={}", report.getId());
+                return;
+            }
             markFailed(report, e.getMessage());
         }
     }
@@ -179,8 +190,14 @@ public class ReportAsyncService {
             );
 
             long fileSize = Files.size(Paths.get(absoluteOutputPath));
+            // 写入前再次确认记录未被软删除（用户触发重新生成时会软删除旧记录）
+            if (reportMapper.selectById(report.getId()) == null) {
+                log.warn("[ReportAsyncService] 报告已被取消/覆盖，放弃写入结果（旧架构）: reportId={}", report.getId());
+                return;
+            }
             report.setFilePath(relativeDir + fileName);
             report.setFileSize(formatSize(fileSize));
+            report.setStatus(ReportStatus.HISTORY.getCode());
             report.setGenerationStatus(ReportStatus.SUCCESS.getCode());
             report.setGenerationError(null);
             report.setUpdatedAt(LocalDateTime.now());
@@ -189,11 +206,19 @@ public class ReportAsyncService {
             log.info("[ReportAsyncService] 报告生成成功（旧架构）: {}", absoluteOutputPath);
         } catch (Exception e) {
             log.error("[ReportAsyncService] 报告生成失败（旧架构）: reportId={}, err={}", report.getId(), e.getMessage(), e);
+            // 写入失败状态前同样校验记录存活性
+            if (reportMapper.selectById(report.getId()) == null) {
+                log.warn("[ReportAsyncService] 报告已被取消/覆盖，放弃写入失败状态（旧架构）: reportId={}", report.getId());
+                return;
+            }
             markFailed(report, e.getMessage());
         }
     }
 
     private void markFailed(Report report, String errMsg) {
+        // 生成失败时将 status 改为 history，使报告在历史列表可见（用户可查看失败原因并删除），
+        // 同时释放"编辑中"占用，避免同年度无法再次生成
+        report.setStatus(ReportStatus.HISTORY.getCode());
         report.setGenerationStatus(ReportStatus.FAILED.getCode());
         report.setGenerationError(errMsg != null && errMsg.length() > 500
                 ? errMsg.substring(0, 500) : errMsg);
