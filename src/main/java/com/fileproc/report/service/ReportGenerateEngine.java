@@ -5,6 +5,7 @@ import com.fileproc.common.BizException;
 import com.fileproc.datafile.entity.DataFile;
 import com.fileproc.template.entity.Placeholder;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.poi.openxml4j.util.ZipSecureFile;
 import org.apache.poi.xwpf.usermodel.*;
 import org.springframework.stereotype.Component;
 
@@ -106,6 +107,8 @@ public class ReportGenerateEngine {
         }
 
         // 读取模板并替换占位符，写出结果
+        // 部分 docx 内嵌字体压缩比较高，调低安全阈值以避免 Zip bomb 误报
+        ZipSecureFile.setMinInflateRatio(0.001);
         try (FileInputStream fis = new FileInputStream(templateFilePath);
              XWPFDocument doc = new XWPFDocument(fis)) {
 
@@ -163,19 +166,38 @@ public class ReportGenerateEngine {
     }
 
     /**
-     * 从行数据中按列名提取第一个数据行的值（文本占位符）。
-     * 第0行视为表头行，按 sourceField 匹配列标题。
+     * 从行数据中按 sourceField 提取值，兼容两种 Sheet 布局：
+     * <ul>
+     *   <li><b>竖向布局</b>（如清单"数据表"）：每行 A列=字段地址（B1/B2...），B列=值。
+     *       遍历所有行，找 A列 == sourceField 的那行，返回 B列值。</li>
+     *   <li><b>横向布局</b>（传统表头行）：第0行为列名表头，第1行为数据行，
+     *       按 sourceField 匹配列标题后取对应列的第1行值。</li>
+     * </ul>
+     * 优先尝试竖向布局；若未命中再尝试横向布局。
      */
     private String extractTextValue(List<Map<Integer, Object>> rows, String sheetName, String sourceField) {
-        if (rows.size() < 2) return null;
+        if (rows == null || rows.isEmpty() || sourceField == null) return null;
 
+        // 优先：竖向布局 — A列(index=0) 的值与 sourceField 匹配，则取 B列(index=1)
+        for (Map<Integer, Object> row : rows) {
+            Object aCell = row.get(0);
+            if (aCell != null && sourceField.equalsIgnoreCase(aCell.toString().trim())) {
+                Object bCell = row.get(1);
+                if (bCell != null && !bCell.toString().isBlank()) {
+                    return bCell.toString().trim();
+                }
+                return null; // 找到行但值为空
+            }
+        }
+
+        // 回退：横向布局 — 第0行为表头，sourceField 匹配列名
+        if (rows.size() < 2) return null;
         Map<Integer, Object> headerRow = rows.get(0);
         Integer colIndex = findColumnIndex(headerRow, sourceField);
         if (colIndex == null) {
-            log.warn("[ReportEngine] 未找到列 '{}' 的索引", sourceField);
+            log.warn("[ReportEngine] 未找到列 '{}' 的索引（竖向/横向均未匹配）", sourceField);
             return null;
         }
-
         Map<Integer, Object> dataRow = rows.get(1);
         Object val = dataRow.get(colIndex);
         return val != null ? val.toString() : null;
