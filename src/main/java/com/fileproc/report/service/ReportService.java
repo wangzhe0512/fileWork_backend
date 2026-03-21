@@ -100,9 +100,10 @@ public class ReportService {
     public Report generateReport(String companyId, int year, String name, String companyTemplateId) {
         String tenantId = TenantContext.getTenantId();
 
-        // 校验是否已有 history 记录
+        // 校验是否已有归档（history）记录：归档后不可重复生成
         Long historyCount = reportMapper.selectCount(
                 new LambdaQueryWrapper<Report>()
+                        .eq(Report::getTenantId, tenantId)
                         .eq(Report::getCompanyId, companyId)
                         .eq(Report::getYear, year)
                         .eq(Report::getStatus, ReportStatus.HISTORY.getCode())
@@ -111,16 +112,16 @@ public class ReportService {
             throw BizException.of(400, "该年度已存在归档报告，不可重复生成");
         }
 
-        // 校验是否有 editing 记录
-        Long editingCount = reportMapper.selectCount(
-                new LambdaQueryWrapper<Report>()
-                        .eq(Report::getCompanyId, companyId)
-                        .eq(Report::getYear, year)
-                        .eq(Report::getStatus, ReportStatus.EDITING.getCode())
+        // 若有 editing 记录（上次生成中/失败），自动清理后重新生成
+        reportMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<Report>()
+                .eq(Report::getTenantId, tenantId)
+                .eq(Report::getCompanyId, companyId)
+                .eq(Report::getYear, year)
+                .eq(Report::getStatus, ReportStatus.EDITING.getCode())
+                .eq(Report::getDeleted, 0)
+                .set(Report::getDeleted, 1)
+                .set(Report::getUpdatedAt, LocalDateTime.now())
         );
-        if (editingCount > 0) {
-            throw BizException.of(400, "该年度已有编辑中的报告，请先归档或删除");
-        }
 
         // 先落库，状态为 pending，立即返回
         Report report = new Report();
