@@ -1635,6 +1635,13 @@ public class ReverseTemplateEngine {
                         cellsCleared++;
                     }
                 }
+                // 删除第2行起的所有多余空行，只保留第一行（含占位符）
+                int totalRows = targetTable.getNumberOfRows();
+                for (int ri = totalRows - 1; ri >= 1; ri--) {
+                    targetTable.removeRow(ri);
+                }
+                log.debug("[ReverseEngine-TableClear] TABLE_CLEAR_FULL 占位符 '{}' 删除多余行 {} 行，仅保留第1行",
+                        entry.getPlaceholderName(), totalRows - 1);
             } else {
                 // 财务表策略：跳过首列，只清数字列
                 for (XWPFTableRow row : rows) {
