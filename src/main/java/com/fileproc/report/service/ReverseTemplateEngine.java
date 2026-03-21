@@ -129,10 +129,10 @@ public class ReverseTemplateEngine {
         // 来源：标准模板"数据表" Sheet，A列=字段名，B列=值
         reg.add(new RegistryEntry("清单模板-数据表-B1", "企业全称",   PlaceholderType.DATA_CELL, "list", "数据表", "B1"));
         reg.add(new RegistryEntry("清单模板-数据表-B2", "年度",       PlaceholderType.DATA_CELL, "list", "数据表", "B2"));
-        reg.add(new RegistryEntry("清单模板-数据表-B3", "注册资本",   PlaceholderType.DATA_CELL, "list", "数据表", "B3"));
-        reg.add(new RegistryEntry("清单模板-数据表-B4", "服务机构简称", PlaceholderType.DATA_CELL, "list", "数据表", "B4"));
+        reg.add(new RegistryEntry("清单模板-数据表-B3", "事务所名称", PlaceholderType.DATA_CELL, "list", "数据表", "B3"));
+        reg.add(new RegistryEntry("清单模板-数据表-B4", "事务所简称", PlaceholderType.DATA_CELL, "list", "数据表", "B4"));
         reg.add(new RegistryEntry("清单模板-数据表-B5", "企业简称",   PlaceholderType.DATA_CELL, "list", "数据表", "B5"));
-        reg.add(new RegistryEntry("清单模板-数据表-B6", "数据表B6",   PlaceholderType.DATA_CELL, "list", "数据表", "B6"));
+        reg.add(new RegistryEntry("清单模板-数据表-B6", "母公司全称", PlaceholderType.DATA_CELL, "list", "数据表", "B6"));
         reg.add(new RegistryEntry("清单模板-数据表-B7", "集团简介",   PlaceholderType.LONG_TEXT, "list", "数据表", "B7"));
         reg.add(new RegistryEntry("清单模板-数据表-B8", "公司概况",   PlaceholderType.LONG_TEXT, "list", "数据表", "B8"));
 
