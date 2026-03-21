@@ -67,8 +67,10 @@ public class ReverseTemplateEngine {
     private enum PlaceholderType {
         /** 数据表单元格：按坐标读取单值，按长度/词边界正则替换 */
         DATA_CELL,
-        /** 整表/区域清空：不读值，识别Word中对应表格后整块内容置为占位符标记 */
+        /** 整表/区域清空（财务表专用）：不读值，识别Word中对应表格后仅清空数字列，写入占位符标记 */
         TABLE_CLEAR,
+        /** 整表全清空（非财务整表）：不读值，识别Word中对应表格后整张表全部清空，仅第一格写入占位符标记 */
+        TABLE_CLEAR_FULL,
         /** 长文本：按坐标读值，在Word中做整段精确字符串替换 */
         LONG_TEXT,
         /** BVD数据：按坐标读值，全部标 uncertain 由用户确认 */
@@ -156,44 +158,47 @@ public class ReverseTemplateEngine {
         reg.add(new RegistryEntry("清单模板-数据表-B7", "集团简介",   PlaceholderType.LONG_TEXT, "list", "数据表", "B7"));
         reg.add(new RegistryEntry("清单模板-数据表-B8", "公司概况",   PlaceholderType.LONG_TEXT, "list", "数据表", "B8"));
 
-        // ===== 第二类：整表/区域占位符（财务类，TABLE_CLEAR，不读值、整块清空） =====
+        // ===== 第二类：整表/区域占位符，分两种策略 =====
+        // TABLE_CLEAR（财务表）：仅清数字列，保留文字描述列
         reg.add(new RegistryEntry("清单模板-PL-12行以上的表格内容", "PL12行以上", PlaceholderType.TABLE_CLEAR, "list", null, null,
                 List.of("损益", "利润表", "PL", "成本收入", "成本加成率", "营业收入", "毛利")));
         reg.add(new RegistryEntry("清单模板-PL",                   "PL全表",     PlaceholderType.TABLE_CLEAR, "list", null, null,
                 List.of("损益", "利润表", "PL", "成本收入", "成本加成率", "营业收入", "毛利")));
         reg.add(new RegistryEntry("清单模板-PL含特殊因素调整",      "PL含特殊因素", PlaceholderType.TABLE_CLEAR, "list", null, null,
                 List.of("含特殊", "特殊因素", "调整后", "PL调整")));
-        reg.add(new RegistryEntry("清单模板-1_组织结构及管理架构",  "组织结构",   PlaceholderType.TABLE_CLEAR, "list", null, null,
+
+        // TABLE_CLEAR_FULL（非财务整表）：整张表全部清空，仅第一格写占位符
+        reg.add(new RegistryEntry("清单模板-1_组织结构及管理架构",  "组织结构",   PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("组织结构", "部门结构", "管理架构", "组织架构")));
-        reg.add(new RegistryEntry("清单模板-主要产品-A列中所列所有产品", "主要产品", PlaceholderType.TABLE_CLEAR, "list", null, null,
+        reg.add(new RegistryEntry("清单模板-主要产品-A列中所列所有产品", "主要产品", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("主要产品", "产品清单", "产品信息", "产品列表")));
-        reg.add(new RegistryEntry("清单模板-2_关联公司信息",        "关联公司信息", PlaceholderType.TABLE_CLEAR, "list", null, null,
+        reg.add(new RegistryEntry("清单模板-2_关联公司信息",        "关联公司信息", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("关联公司", "关联方公司", "关联企业")));
-        reg.add(new RegistryEntry("清单模板-关联方个人信息",        "关联方个人信息", PlaceholderType.TABLE_CLEAR, "list", null, null,
+        reg.add(new RegistryEntry("清单模板-关联方个人信息",        "关联方个人信息", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("关联方个人", "关联个人", "个人信息")));
-        reg.add(new RegistryEntry("清单模板-关联关系变化情况",      "关联关系变化", PlaceholderType.TABLE_CLEAR, "list", null, null,
+        reg.add(new RegistryEntry("清单模板-关联关系变化情况",      "关联关系变化", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("关联关系变化", "关联变化", "关系变化")));
-        reg.add(new RegistryEntry("清单模板-关联交易汇总表",        "关联交易汇总", PlaceholderType.TABLE_CLEAR, "list", null, null,
+        reg.add(new RegistryEntry("清单模板-关联交易汇总表",        "关联交易汇总", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("关联交易汇总", "关联交易总", "关联交易合计")));
-        reg.add(new RegistryEntry("清单模板-5_客户清单",            "客户清单",   PlaceholderType.TABLE_CLEAR, "list", null, null,
+        reg.add(new RegistryEntry("清单模板-5_客户清单",            "客户清单",   PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("客户清单", "主要客户", "前五大客户", "主要客户情况")));
-        reg.add(new RegistryEntry("清单模板-4_供应商清单",          "供应商清单", PlaceholderType.TABLE_CLEAR, "list", null, null,
+        reg.add(new RegistryEntry("清单模板-4_供应商清单",          "供应商清单", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("供应商清单", "主要供应商", "前五大供应商", "供应商情况")));
-        reg.add(new RegistryEntry("清单模板-6_劳务交易表",          "劳务交易表", PlaceholderType.TABLE_CLEAR, "list", null, null,
+        reg.add(new RegistryEntry("清单模板-6_劳务交易表",          "劳务交易表", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("劳务交易", "劳务服务", "劳务收费")));
-        reg.add(new RegistryEntry("清单模板-劳务成本费用归集",      "劳务成本费用", PlaceholderType.TABLE_CLEAR, "list", null, null,
+        reg.add(new RegistryEntry("清单模板-劳务成本费用归集",      "劳务成本费用", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("劳务成本", "费用归集", "成本归集")));
-        reg.add(new RegistryEntry("清单模板-资金融通",              "资金融通",   PlaceholderType.TABLE_CLEAR, "list", null, null,
+        reg.add(new RegistryEntry("清单模板-资金融通",              "资金融通",   PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("资金融通", "资金借贷", "融通")));
-        reg.add(new RegistryEntry("清单模板-有形资产信息",          "有形资产信息", PlaceholderType.TABLE_CLEAR, "list", null, null,
+        reg.add(new RegistryEntry("清单模板-有形资产信息",          "有形资产信息", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("有形资产", "固定资产", "资产信息")));
-        reg.add(new RegistryEntry("清单模板-功能风险汇总表",        "功能风险汇总", PlaceholderType.TABLE_CLEAR, "list", null, null,
+        reg.add(new RegistryEntry("清单模板-功能风险汇总表",        "功能风险汇总", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("功能风险", "功能分析", "风险汇总", "功能与风险")));
-        reg.add(new RegistryEntry("清单模板-3_分部财务数据",        "分部财务数据", PlaceholderType.TABLE_CLEAR, "list", null, null,
+        reg.add(new RegistryEntry("清单模板-3_分部财务数据",        "分部财务数据", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("分部财务", "财务数据", "分部数据")));
-        reg.add(new RegistryEntry("清单模板-公司经营背景资料",      "公司经营背景", PlaceholderType.TABLE_CLEAR, "list", null, null,
+        reg.add(new RegistryEntry("清单模板-公司经营背景资料",      "公司经营背景", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("经营背景", "公司背景", "背景资料", "经营情况")));
-        reg.add(new RegistryEntry("清单数据模板-公司间资金融通交易总结", "公司间资金融通", PlaceholderType.TABLE_CLEAR, "list", null, null,
+        reg.add(new RegistryEntry("清单数据模板-公司间资金融通交易总结", "公司间资金融通", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("公司间资金", "资金融通交易总结", "公司间融通", "资金融通总结")));
 
         // ===== 第三类：行业情况长文本占位符（清单 → 行业情况 Sheet B1~B5） =====
@@ -207,10 +212,10 @@ public class ReverseTemplateEngine {
         // ===== 第四类：BVD 数据占位符（BVD Excel 按坐标读取，全部标 uncertain） =====
         // 来源：BVD Excel 各 Sheet
         // 数据表 B1~B4：独立交易区间表4行数据（B1=可比公司数量, B2=上四分位值, B3=中位值, B4=下四分位值）
-        reg.add(new RegistryEntry("BVD数据模板-数据表B1",                 "BVD-可比公司数量",    PlaceholderType.BVD, "bvd", "数据表", "B1"));
-        reg.add(new RegistryEntry("BVD数据模板-数据表B2",                 "BVD-上四分位值",      PlaceholderType.BVD, "bvd", "数据表", "B2"));
-        reg.add(new RegistryEntry("BVD数据模板-数据表B3",                 "BVD-中位值",          PlaceholderType.BVD, "bvd", "数据表", "B3"));
-        reg.add(new RegistryEntry("BVD数据模板-数据表B4",                 "BVD-下四分位值",      PlaceholderType.BVD, "bvd", "数据表", "B4"));
+        reg.add(new RegistryEntry("BVD数据模板-数据表-B1",                "BVD-可比公司数量",    PlaceholderType.BVD, "bvd", "数据表", "B1"));
+        reg.add(new RegistryEntry("BVD数据模板-数据表-B2",                "BVD-上四分位值",      PlaceholderType.BVD, "bvd", "数据表", "B2"));
+        reg.add(new RegistryEntry("BVD数据模板-数据表-B3",                "BVD-中位值",          PlaceholderType.BVD, "bvd", "数据表", "B3"));
+        reg.add(new RegistryEntry("BVD数据模板-数据表-B4",                "BVD-下四分位值",      PlaceholderType.BVD, "bvd", "数据表", "B4"));
         reg.add(new RegistryEntry("BVD数据模板-AP_YEAR",                 "BVD-AP年度",        PlaceholderType.BVD, "bvd", "AP",     "A1"));
         reg.add(new RegistryEntry("BVD数据模板-AP_Lead_Sheet_YEAR-13-19", "BVD-AP Lead 13~19行", PlaceholderType.BVD, "bvd", "AP Lead Sheet", "A13"));
         reg.add(new RegistryEntry("BVD数据模板-SummaryYear-第一张表格",   "BVD-SummaryYear表1", PlaceholderType.BVD, "bvd", "SummaryYear", "A1"));
@@ -421,7 +426,8 @@ public class ReverseTemplateEngine {
         List<ExcelEntry> longTextEntries = entries.stream()
                 .filter(ExcelEntry::isLongText).toList();
         List<ExcelEntry> tableClearEntries = entries.stream()
-                .filter(e -> e.getPlaceholderType() == PlaceholderType.TABLE_CLEAR).toList();
+                .filter(e -> e.getPlaceholderType() == PlaceholderType.TABLE_CLEAR
+                        || e.getPlaceholderType() == PlaceholderType.TABLE_CLEAR_FULL).toList();
 
         log.info("[ReverseEngine] ExcelEntry总计={} （长文本={}, 数据字段={}, 整表清空={}, BVD={}）",
                 entries.size(),
@@ -446,6 +452,9 @@ public class ReverseTemplateEngine {
 
             // 2b. 替换表格单元格（LONG_TEXT / DATA_CELL / BVD）
             matchedCount[0] += replaceTableCellValuesNew(doc, entries, pendingList, matchedList);
+
+            // 2c-pre. BVD区间表：按表格结构识别独立交易区间表，按行位置写入BVD占位符
+            matchedCount[0] += replaceBvdRangeTable(doc, matchedList);
 
             // 2c. TABLE_CLEAR：整块清空财务表格数字列
             if (!tableClearEntries.isEmpty()) {
@@ -521,17 +530,16 @@ public class ReverseTemplateEngine {
             // BVD 类型由 buildBvdEntries 处理，此处跳过
             if ("bvd".equals(reg.getDataSource())) continue;
 
-            if (reg.getType() == PlaceholderType.TABLE_CLEAR) {
-                // TABLE_CLEAR：不读值，直接生成清空标记条目，携带标题关键词用于精确表格匹配
+            if (reg.getType() == PlaceholderType.TABLE_CLEAR || reg.getType() == PlaceholderType.TABLE_CLEAR_FULL) {
+                // TABLE_CLEAR / TABLE_CLEAR_FULL：不读值，直接生成清空标记条目，携带标题关键词用于精确表格匹配
                 ExcelEntry entry = new ExcelEntry();
-                entry.setValue(null);
                 entry.setPlaceholderName(reg.getPlaceholderName());
                 entry.setDisplayName(reg.getDisplayName());
                 entry.setDataSource(reg.getDataSource());
                 entry.setSourceSheet(reg.getSheetName());
                 entry.setSourceField(null);
                 entry.setLongText(false);
-                entry.setPlaceholderType(PlaceholderType.TABLE_CLEAR);
+                entry.setPlaceholderType(reg.getType());
                 entry.setTitleKeywords(reg.getTitleKeywords());
                 tableClearEntries.add(entry);
                 continue;
@@ -1083,8 +1091,9 @@ public class ReverseTemplateEngine {
             boolean runModified = false;
 
             for (ExcelEntry entry : entries) {
-                // TABLE_CLEAR 类型由 clearTableBlock 处理，此处跳过
-                if (entry.getPlaceholderType() == PlaceholderType.TABLE_CLEAR) continue;
+                // TABLE_CLEAR / TABLE_CLEAR_FULL 类型由 clearTableBlock 处理，此处跳过
+                if (entry.getPlaceholderType() == PlaceholderType.TABLE_CLEAR
+                        || entry.getPlaceholderType() == PlaceholderType.TABLE_CLEAR_FULL) continue;
 
                 String value = entry.getValue();
                 if (value == null || value.isBlank()) continue;
@@ -1114,7 +1123,7 @@ public class ReverseTemplateEngine {
                     }
 
                 } else if (pType == PlaceholderType.BVD) {
-                    // ② BVD：全部标 uncertain，不修改文本，记录到 matchedList
+                    // ② BVD：全部标 uncertain，不修改文本（BVD分位数值与文档实际值不对应，由 replaceBvdRangeTable 按位置替换）
                     addMatchedRecord(matchedList, entry, value, originalText, location,
                             "uncertain", paragraphIndex, tableIndex, rowIndex, cellIndex);
                     log.debug("[ReverseEngine] BVD-uncertain: '{}' -> {}", value, phMark);
@@ -1393,6 +1402,99 @@ public class ReverseTemplateEngine {
     }
 
     /**
+     * BVD 独立交易区间表按位置替换。
+     *
+     * <p>通过表格首列关键词（"四分位区间"或"可比公司数量"）识别独立交易区间表，
+     * 然后跳过表头行，按数据行顺序将第2列单元格依次写入
+     * {@code {{BVD数据模板-数据表B1}}} ~ {@code {{BVD数据模板-数据表B4}}}。
+     *
+     * @param doc         Word 文档
+     * @param matchedList 用于记录处理结果
+     * @return 实际写入的占位符数量
+     */
+    private int replaceBvdRangeTable(XWPFDocument doc, List<MatchedPlaceholder> matchedList) {
+        String[] bvdPlaceholders = {
+            "BVD数据模板-数据表-B1",
+            "BVD数据模板-数据表-B2",
+            "BVD数据模板-数据表-B3",
+            "BVD数据模板-数据表-B4"
+        };
+
+        int count = 0;
+        List<XWPFTable> allTables = doc.getTables();
+        for (int tIdx = 0; tIdx < allTables.size(); tIdx++) {
+            XWPFTable table = allTables.get(tIdx);
+            List<XWPFTableRow> rows = table.getRows();
+            if (rows.size() < 2) continue;
+
+            // 识别：首列任意行含"四分位区间"或"可比公司数量"视为独立交易区间表
+            boolean isBvdTable = false;
+            for (XWPFTableRow row : rows) {
+                List<XWPFTableCell> cells = row.getTableCells();
+                if (cells.isEmpty()) continue;
+                String firstCell = cells.get(0).getText().trim();
+                if (firstCell.contains("四分位区间") || firstCell.contains("可比公司数量")) {
+                    isBvdTable = true;
+                    break;
+                }
+            }
+            if (!isBvdTable) continue;
+
+            log.info("[ReverseEngine-BVD] 识别到独立交易区间表#{}，开始按行写入BVD占位符", tIdx);
+
+            // 跳过表头行（首列含"四分位区间"的行），数据行依次对应 B1~B4
+            int bvdIdx = 0;
+            for (int rIdx = 0; rIdx < rows.size() && bvdIdx < bvdPlaceholders.length; rIdx++) {
+                XWPFTableRow row = rows.get(rIdx);
+                List<XWPFTableCell> cells = row.getTableCells();
+                if (cells.size() < 2) continue;
+                String firstCellText = cells.get(0).getText().trim();
+                if (firstCellText.contains("四分位区间")) continue; // 跳过表头
+
+                XWPFTableCell dataCell = cells.get(1);
+                String phMark = "{{" + bvdPlaceholders[bvdIdx] + "}}";
+
+                // 写入占位符到第2列单元格
+                List<XWPFParagraph> paras = dataCell.getParagraphs();
+                if (!paras.isEmpty()) {
+                    XWPFParagraph para = paras.get(0);
+                    List<XWPFRun> cellRuns = para.getRuns();
+                    if (!cellRuns.isEmpty()) {
+                        cellRuns.get(0).setText(phMark, 0);
+                        for (int r = 1; r < cellRuns.size(); r++) {
+                            cellRuns.get(r).setText("", 0);
+                        }
+                    } else {
+                        para.createRun().setText(phMark);
+                    }
+                }
+
+                // 记录匹配
+                MatchedPlaceholder mp = new MatchedPlaceholder();
+                mp.setPlaceholderName(bvdPlaceholders[bvdIdx]);
+                mp.setExpectedValue("[BVD按位置]");
+                mp.setActualValue(phMark);
+                mp.setLocation("表格#" + tIdx + "-行" + rIdx + "-列1");
+                mp.setStatus("confirmed");
+                mp.setDataSource("bvd");
+                mp.setSourceSheet("数据表");
+                mp.setSourceField("B" + (bvdIdx + 1));
+                mp.setModuleName("BVD数据");
+                mp.setModuleCode("bvd");
+                mp.setPositionJson("{\"elementType\":\"table\",\"tableIndex\":" + tIdx
+                        + ",\"rowIndex\":" + rIdx + ",\"cellIndex\":1}");
+                matchedList.add(mp);
+
+                log.info("[ReverseEngine-BVD] 表格#{}行{} → {}", tIdx, rIdx, phMark);
+                bvdIdx++;
+                count++;
+            }
+            break; // 只处理第一个识别到的区间表
+        }
+        return count;
+    }
+
+    /**
      * TABLE_CLEAR 类型整块清空处理（路径A：精确标题匹配）。
      *
      * <p><b>两阶段策略：</b>
@@ -1502,7 +1604,7 @@ public class ReverseTemplateEngine {
             // 标记该表格已绑定，防止其他条目复用
             boundTables.add(targetTable);
 
-            // 清空该表格数字列
+            // 清空该表格：根据类型选择策略
             List<XWPFTableRow> rows = targetTable.getRows();
             if (rows.isEmpty()) {
                 unmatchedEntries.add(entry);
@@ -1510,27 +1612,53 @@ public class ReverseTemplateEngine {
             }
             int colCount = rows.get(0).getTableCells().size();
             int cellsCleared = 0;
-            for (XWPFTableRow row : rows) {
-                List<XWPFTableCell> cells = row.getTableCells();
-                for (int cIdx = 1; cIdx < cells.size() && cIdx < colCount; cIdx++) {
-                    XWPFTableCell cell = cells.get(cIdx);
-                    String cellText = cell.getText().trim();
-                    if (cellText.isBlank()) continue;
-                    // 只清空数字类内容（整数/小数/千分位/百分比/负数）
-                    if (!cellText.matches("-?[\\d,]+(\\.[\\d]+)?%?") &&
-                            !cellText.matches("-?[\\d,.\\s]+")) continue;
 
-                    // 清空该单元格所有段落，写入占位符标记
-                    for (XWPFParagraph para : cell.getParagraphs()) {
-                        List<XWPFRun> cellRuns = para.getRuns();
-                        if (!cellRuns.isEmpty()) {
-                            cellRuns.get(0).setText(phMark, 0);
-                            for (int r = 1; r < cellRuns.size(); r++) {
-                                cellRuns.get(r).setText("", 0);
+            if (entry.getPlaceholderType() == PlaceholderType.TABLE_CLEAR_FULL) {
+                // 整表全清空策略：遍历所有行所有列，第一个非空单元格写占位符，其余全部清空
+                boolean firstCellWritten = false;
+                for (XWPFTableRow row : rows) {
+                    for (XWPFTableCell cell : row.getTableCells()) {
+                        for (XWPFParagraph para : cell.getParagraphs()) {
+                            List<XWPFRun> cellRuns = para.getRuns();
+                            if (!cellRuns.isEmpty()) {
+                                if (!firstCellWritten) {
+                                    cellRuns.get(0).setText(phMark, 0);
+                                    firstCellWritten = true;
+                                } else {
+                                    cellRuns.get(0).setText("", 0);
+                                }
+                                for (int r = 1; r < cellRuns.size(); r++) {
+                                    cellRuns.get(r).setText("", 0);
+                                }
                             }
                         }
+                        cellsCleared++;
                     }
-                    cellsCleared++;
+                }
+            } else {
+                // 财务表策略：跳过首列，只清数字列
+                for (XWPFTableRow row : rows) {
+                    List<XWPFTableCell> cells = row.getTableCells();
+                    for (int cIdx = 1; cIdx < cells.size() && cIdx < colCount; cIdx++) {
+                        XWPFTableCell cell = cells.get(cIdx);
+                        String cellText = cell.getText().trim();
+                        if (cellText.isBlank()) continue;
+                        // 只清空数字类内容（整数/小数/千分位/百分比/负数）
+                        if (!cellText.matches("-?[\\d,]+(\\.[\\d]+)?%?") &&
+                                !cellText.matches("-?[\\d,.\\s]+")) continue;
+
+                        // 清空该单元格所有段落，写入占位符标记
+                        for (XWPFParagraph para : cell.getParagraphs()) {
+                            List<XWPFRun> cellRuns = para.getRuns();
+                            if (!cellRuns.isEmpty()) {
+                                cellRuns.get(0).setText(phMark, 0);
+                                for (int r = 1; r < cellRuns.size(); r++) {
+                                    cellRuns.get(r).setText("", 0);
+                                }
+                            }
+                        }
+                        cellsCleared++;
+                    }
                 }
             }
             clearedCount += cellsCleared;
@@ -1565,6 +1693,8 @@ public class ReverseTemplateEngine {
      *   <li>数据行（跳过首行表头）中，数字内容单元格占比 &ge; 40%</li>
      *   <li><b>排除</b>：若首列任意单元格含 {@code x.x.x} 格式章节编号（如 2.2.2、4.1），则不视为财务表</li>
      *   <li><b>排除</b>：若表格首行含"报告索引"或"章节"文本，则不视为财务表</li>
+     *   <li><b>排除</b>：若表格首行含"主要部门"或"人数"，则不视为财务表（部门结构表）</li>
+     *   <li><b>排除</b>：若首列含"四分位区间"等关键词，则不视为财务表（独立交易区间表）</li>
      * </ul>
      */
     private boolean isFinancialTable(XWPFTable table) {
@@ -1587,6 +1717,23 @@ public class ReverseTemplateEngine {
             if (cells.isEmpty()) continue;
             String firstCellText = cells.get(0).getText().trim();
             if (chapterPattern.matcher(firstCellText).matches()) {
+                return false;
+            }
+        }
+
+        // 排除规则3（新）：部门结构表（表头含"主要部门"或"人数"关键词）
+        if (headerRowText.contains("主要部门") || headerRowText.contains("人数")) {
+            return false;
+        }
+
+        // 排除规则5：独立交易区间表（首列含四分位/可比公司相关关键词）
+        for (XWPFTableRow row : rows) {
+            List<XWPFTableCell> cells = row.getTableCells();
+            if (cells.isEmpty()) continue;
+            String firstCellText = cells.get(0).getText().trim();
+            if (firstCellText.contains("可比公司数量") || firstCellText.contains("上四分位")
+                    || firstCellText.contains("中位值") || firstCellText.contains("下四分位")
+                    || firstCellText.contains("四分位区间")) {
                 return false;
             }
         }
