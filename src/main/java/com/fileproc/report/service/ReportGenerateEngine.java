@@ -87,6 +87,7 @@ public class ReportGenerateEngine {
 
             if ("text".equals(ph.getType())) {
                 String value = extractTextValue(rows, ph.getSourceSheet(), ph.getSourceField());
+                value = expandYearValue(ph.getName(), value);
                 textValues.put(ph.getName(), value != null ? value : "");
             } else if ("table".equals(ph.getType())) {
                 List<List<Object>> tableData = extractTableData(rows, ph.getSourceSheet());
@@ -454,5 +455,21 @@ public class ReportGenerateEngine {
                 }
             }
         }
+    }
+
+    /**
+     * 年度字段扩展：占位符名以 "-B2" 结尾且值为 2 位数字时，
+     * 将原始值扩展为 "20XX年" 格式（如 "24" → "2024年"）。
+     *
+     * @param placeholderName 占位符名称
+     * @param value           从 Excel 提取的原始值
+     * @return 扩展后的值；不满足条件时原样返回
+     */
+    private String expandYearValue(String placeholderName, String value) {
+        if (placeholderName != null && placeholderName.endsWith("-B2")
+                && value != null && value.matches("^\\d{2}$")) {
+            return "20" + value + "年";
+        }
+        return value;
     }
 }
