@@ -1096,9 +1096,20 @@ public class ReverseTemplateEngine {
                                 log.debug("[ReverseEngine] 年度变体替换[{}]: '{}' -> {}", entry.getDisplayName(), variant, phMark);
                             }
                         }
+                    } else if (isShortAbbrevField(entry)) {
+                        // 短简称字段（如B4事务所简称）：使用词边界替换，防止误替换已被替换为占位符的长值内的子串
+                        // 注：buildExcelEntries 已按值长度降序排序，B3全称先于B4简称处理，此处为额外防护
+                        String newText = replaceWithWordBoundary(text, value, phMark);
+                        if (!newText.equals(text)) {
+                            text = newText;
+                            runModified = true;
+                            count++;
+                            addMatchedRecord(matchedList, entry, value, originalText, location,
+                                    "confirmed", paragraphIndex, tableIndex, rowIndex, cellIndex);
+                            log.debug("[ReverseEngine] 词边界替换[简称][{}]: '{}' -> {}", entry.getDisplayName(), value, phMark);
+                        }
                     } else {
-                        // 非年度字段：统一使用精确替换（text.replace）
-                        // 词边界正则对中文简称无效（前后几乎总是汉字），直接精确替换
+                        // 非年度/非短简称字段：精确替换
                         String newText = text.replace(value, phMark);
                         if (!newText.equals(text)) {
                             text = newText;
@@ -1270,6 +1281,23 @@ public class ReverseTemplateEngine {
         return "清单模板-数据表-B2".equals(entry.getPlaceholderName())
                 && entry.getValue() != null
                 && entry.getValue().matches("\\d{2}");
+    }
+
+    /**
+     * 判断是否为短简称字段（需要词边界保护替换）。
+     *
+     * <p>当前规则：清单数据表 B4（事务所简称）且值长度 ≤ 6 字时，认为是短简称字段。
+     * 短简称可能作为全称的子串出现（如"立信税务"是"立信税务师事务所有限公司"的子串），
+     * 使用词边界替换可防止误替换全称已被替换为占位符后残留子串的情况。
+     *
+     * @param entry Excel 条目
+     * @return true 表示需要走词边界替换逻辑
+     */
+    private boolean isShortAbbrevField(ExcelEntry entry) {
+        if (entry.getValue() == null || entry.getPlaceholderName() == null) return false;
+        // B4 事务所简称：值长度 ≤ 6 字
+        return entry.getValue().length() <= 6
+                && entry.getPlaceholderName().endsWith("-B4");
     }
 
     /**
