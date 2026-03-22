@@ -7,11 +7,15 @@ import com.fileproc.template.entity.Placeholder;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.openxml4j.util.ZipSecureFile;
 import org.apache.poi.xwpf.usermodel.*;
+import org.apache.xmlbeans.XmlObject;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTRow;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTbl;
 import org.springframework.stereotype.Component;
 
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.*;
@@ -265,6 +269,66 @@ public class ReportGenerateEngine {
             return result;
         }
 
+        // 供应商清单 / 客户清单 Sheet 专用提取逻辑（行模板克隆方案数据源）
+        // 结构：行0=公司名, 行1=空, 行2=附件标题, 行3=说明, 行4=大表头, 行5=子表头, 行6=分组标题, 行7起=数据
+        // 输出：虚拟空表头行 + [col0=分组/名称/文本, col1=交易金额, col2=占比] 三列
+        if ("4 供应商清单".equals(sheetName) || "5 客户清单".equals(sheetName)) {
+            List<List<Object>> result = new ArrayList<>();
+            // 虚拟空表头（3列），供 fillTableByRowTemplate 跳过 index=0
+            result.add(Arrays.asList("", "", ""));
+
+            for (int i = 7; i < rows.size(); i++) {
+                Map<Integer, Object> row = rows.get(i);
+                Object col0 = row.get(0);
+                Object col1 = row.get(1);
+                Object col2 = row.get(2);
+                Object col4 = row.get(4);
+                Object col5 = row.get(5);
+
+                String col0Str = col0 != null ? col0.toString().trim() : "";
+                String col1Str = col1 != null ? col1.toString().trim() : "";
+                String col2Str = col2 != null ? col2.toString().trim() : "";
+
+                // 分组标题行：col0非空，col1为空（或空白），col2为空
+                if (!col0Str.isEmpty() && col1Str.isEmpty() && col2Str.isEmpty()) {
+                    // 小计/总计行
+                    if (col0Str.contains("小计") || col0Str.contains("合计") || col0Str.contains("总计")) {
+                        result.add(Arrays.asList(col0Str, toPlainString(col4), toPlainString(col5)));
+                    } else {
+                        // 纯分组标题行
+                        result.add(Arrays.asList(col0Str, "", ""));
+                    }
+                    continue;
+                }
+
+                // col1含"小计"/"合计"/"总计"
+                if (!col1Str.isEmpty() && (col1Str.contains("小计") || col1Str.contains("合计") || col1Str.contains("总计"))) {
+                    result.add(Arrays.asList(col1Str, toPlainString(col4), toPlainString(col5)));
+                    continue;
+                }
+
+                // 明细行：col1为纯数字编号 或 "其他"
+                boolean isSeqNum = col1Str.matches("^\\d+$");
+                boolean isOther = "其他".equals(col1Str);
+                if (isSeqNum || isOther) {
+                    if (col2Str.isEmpty() && !isOther) continue; // 名称为空的明细行跳过
+                    String name = isOther ? "其他" : col2Str;
+                    if (!name.isEmpty()) {
+                        result.add(Arrays.asList(name, toPlainString(col4), toPlainString(col5)));
+                    }
+                    continue;
+                }
+
+                // col0含"非关联"：关联区域结束，停止扫描
+                if (col0Str.contains("非关联")) {
+                    break;
+                }
+            }
+
+            log.debug("[ReportEngine] Sheet '{}' 行模板数据提取完成，共 {} 行（含虚拟表头）", sheetName, result.size());
+            return result;
+        }
+
         List<List<Object>> result = new ArrayList<>();
         // 确定最大列数
         int maxCol = rows.stream()
@@ -438,8 +502,14 @@ public class ReportGenerateEngine {
                         if (cellText != null && cellText.contains(marker)) {
                             // 清除标记单元格内容
                             clearCellText(cell, marker);
-                            // 填充数据到该表格（从第二行开始追加，第一行保留为表头）
-                            fillTableWithData(table, data);
+                            // 检测该表格是否存在行模板标记（{{_tpl_}}），有则走克隆路径
+                            boolean hasRowTemplate = tableHasRowTemplateMarker(table);
+                            if (hasRowTemplate) {
+                                fillTableByRowTemplate(table, data);
+                            } else {
+                                // 填充数据到该表格（从第二行开始追加，第一行保留为表头）
+                                fillTableWithData(table, data);
+                            }
                             found = true;
                             break;
                         }
@@ -535,5 +605,172 @@ public class ReportGenerateEngine {
             return "20" + value + "年";
         }
         return value;
+    }
+
+    /**
+     * 检测表格中是否存在行模板标记（单元格文本含 "{{_tpl_" 前缀）。
+     */
+    private boolean tableHasRowTemplateMarker(XWPFTable table) {
+        for (XWPFTableRow row : table.getRows()) {
+            for (XWPFTableCell cell : row.getTableCells()) {
+                String text = cell.getText();
+                if (text != null && text.contains("{{_tpl_")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 行模板克隆方式填充表格。
+     * <p>
+     * 逻辑：
+     * <ol>
+     *   <li>扫描表格，找到含 {@code {{_tpl_}} 标记的模板行（tplRowIdx）</li>
+     *   <li>对 data 第1行起每条数据，深克隆模板行 XML（{@link CTRow#copy()}），清空单元格后逐列写入数据</li>
+     *   <li>将所有新行插入模板行之前（通过 CTTbl XML 操作），最后删除原模板行</li>
+     *   <li>若未找到模板行，退回 {@link #fillTableWithData(XWPFTable, List)}</li>
+     * </ol>
+     * </p>
+     *
+     * @param table 目标 Word 表格
+     * @param data  数据列表，index=0 为虚拟表头（跳过），index=1~N 为实际数据行，每行3列（名称/金额/占比）
+     */
+    private void fillTableByRowTemplate(XWPFTable table, List<List<Object>> data) {
+        if (data == null || data.size() <= 1) {
+            log.warn("[ReportEngine-RowTemplate] 数据为空或只有表头行，跳过填充");
+            return;
+        }
+
+        // 1. 找到模板行
+        int tplRowIdx = -1;
+        for (int i = 0; i < table.getRows().size(); i++) {
+            XWPFTableRow row = table.getRow(i);
+            for (XWPFTableCell cell : row.getTableCells()) {
+                if (cell.getText() != null && cell.getText().contains("{{_tpl_")) {
+                    tplRowIdx = i;
+                    break;
+                }
+            }
+            if (tplRowIdx >= 0) break;
+        }
+
+        if (tplRowIdx < 0) {
+            log.warn("[ReportEngine-RowTemplate] 未找到含 {{_tpl_}} 标记的模板行，退回 fillTableWithData");
+            fillTableWithData(table, data);
+            return;
+        }
+
+        XWPFTableRow tplRow = table.getRow(tplRowIdx);
+        CTRow tplCt = tplRow.getCtRow();
+        CTTbl ctTbl = table.getCTTbl();
+        int tableColCount = tplRow.getTableCells().size();
+
+        // 2. 克隆并插入新行（在模板行之前）
+        // data 第0行为虚拟表头，跳过；从 index=1 开始
+        int insertedCount = 0;
+        for (int di = 1; di < data.size(); di++) {
+            List<Object> dataRow = data.get(di);
+
+            // 深克隆模板行 XML
+            CTRow newCt = (CTRow) tplCt.copy();
+            XWPFTableRow newRow = new XWPFTableRow(newCt, table);
+
+            // 清空并写入数据（按列 0/1/2）
+            List<XWPFTableCell> newCells = newRow.getTableCells();
+            int colLimit = Math.min(dataRow.size(), Math.min(newCells.size(), tableColCount));
+            for (int ci = 0; ci < colLimit; ci++) {
+                XWPFTableCell cell = newCells.get(ci);
+                String cellVal = dataRow.get(ci) != null ? dataRow.get(ci).toString() : "";
+                // 清空模板占位符文本，写入实际数据
+                setCellText(cell, cellVal);
+            }
+            // 多余列清空
+            for (int ci = colLimit; ci < newCells.size(); ci++) {
+                setCellText(newCells.get(ci), "");
+            }
+
+            // 将新行 CTRow 插入到 CTTbl 中模板行之前
+            int insertPos = tplRowIdx + insertedCount;
+            // 通过 CTTbl 的 insertNewTr 在指定位置插入，然后将克隆的 CTRow 内容拷贝过去
+            // 由于 Apache POI 没有直接的"在指定位置插入已有CTRow"API，
+            // 使用 xmlbeans 的 selectPath / domNode 方式操作
+            org.w3c.dom.Node tblNode = ctTbl.getDomNode();
+            org.w3c.dom.NodeList trNodes = tblNode.getChildNodes();
+            // 找到第 insertPos 个 <w:tr> 节点
+            int trCount = 0;
+            org.w3c.dom.Node refNode = null;
+            for (int ni = 0; ni < trNodes.getLength(); ni++) {
+                org.w3c.dom.Node n = trNodes.item(ni);
+                if ("w:tr".equals(n.getNodeName())) {
+                    if (trCount == insertPos) {
+                        refNode = n;
+                        break;
+                    }
+                    trCount++;
+                }
+            }
+            org.w3c.dom.Node newTrNode = newCt.getDomNode();
+            // importNode 以确保节点属于同一 Document
+            org.w3c.dom.Node imported = tblNode.getOwnerDocument().importNode(newTrNode, true);
+            if (refNode != null) {
+                tblNode.insertBefore(imported, refNode);
+            } else {
+                tblNode.appendChild(imported);
+            }
+            insertedCount++;
+        }
+
+        // 3. 删除原始模板行（其在 CTTbl 中的位置已向后移了 insertedCount 个）
+        int realTplIdx = tplRowIdx + insertedCount;
+        org.w3c.dom.Node tblNode2 = ctTbl.getDomNode();
+        org.w3c.dom.NodeList trNodes2 = tblNode2.getChildNodes();
+        int trCount2 = 0;
+        for (int ni = 0; ni < trNodes2.getLength(); ni++) {
+            org.w3c.dom.Node n = trNodes2.item(ni);
+            if ("w:tr".equals(n.getNodeName())) {
+                if (trCount2 == realTplIdx) {
+                    tblNode2.removeChild(n);
+                    break;
+                }
+                trCount2++;
+            }
+        }
+
+        log.info("[ReportEngine-RowTemplate] 行模板克隆完成：模板行idx={}，克隆插入 {} 行，数据行数={}",
+                tplRowIdx, insertedCount, data.size() - 1);
+    }
+
+    /**
+     * 清空单元格所有段落文本并写入指定值（使用第一个 Run，不改变格式）。
+     */
+    private void setCellText(XWPFTableCell cell, String value) {
+        boolean first = true;
+        for (XWPFParagraph para : cell.getParagraphs()) {
+            List<XWPFRun> runs = para.getRuns();
+            if (!runs.isEmpty()) {
+                runs.get(0).setText(first ? value : "", 0);
+                first = false;
+                for (int r = 1; r < runs.size(); r++) {
+                    runs.get(r).setText("", 0);
+                }
+            } else if (first) {
+                para.createRun().setText(value);
+                first = false;
+            }
+        }
+    }
+
+    /**
+     * 将 Excel 读取到的数值对象转为普通字符串（避免科学计数法）。
+     * Double → BigDecimal.toPlainString；其他 → toString；null → ""。
+     */
+    private String toPlainString(Object val) {
+        if (val == null) return "";
+        if (val instanceof Double) {
+            return BigDecimal.valueOf((Double) val).stripTrailingZeros().toPlainString();
+        }
+        return val.toString().trim();
     }
 }

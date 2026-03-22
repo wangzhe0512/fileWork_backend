@@ -71,6 +71,8 @@ public class ReverseTemplateEngine {
         TABLE_CLEAR,
         /** 整表全清空（非财务整表）：不读值，识别Word中对应表格后整张表全部清空，仅第一格写入占位符标记 */
         TABLE_CLEAR_FULL,
+        /** 行模板克隆（动态行数表）：逆向时保留表头行+1行列占位符模板行（以{{_tpl_}}标记），生成时克隆该行N次填数据 */
+        TABLE_ROW_TEMPLATE,
         /** 长文本：按坐标读值，在Word中做整段精确字符串替换 */
         LONG_TEXT,
         /** BVD数据：按坐标读值，全部标 uncertain 由用户确认 */
@@ -178,6 +180,13 @@ public class ReverseTemplateEngine {
                 List.of("关联关系变化", "关联变化", "关系变化")));
         reg.add(new RegistryEntry("清单模板-关联交易汇总表",        "关联交易汇总", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("关联交易汇总", "关联交易总", "关联交易合计")));
+        // TABLE_ROW_TEMPLATE：行模板克隆（动态行数明细表），注意需在 客户清单/供应商清单 之前注册，防止关键词抢先匹配
+        reg.add(new RegistryEntry("清单模板-4_供应商关联采购明细", "关联采购明细",
+                PlaceholderType.TABLE_ROW_TEMPLATE, "list", "4 供应商清单", null,
+                List.of("关联采购交易明细", "关联采购明细表", "采购交易明细表")));
+        reg.add(new RegistryEntry("清单模板-5_客户关联销售明细", "关联销售明细",
+                PlaceholderType.TABLE_ROW_TEMPLATE, "list", "5 客户清单", null,
+                List.of("关联销售交易明细", "关联销售明细表", "销售交易明细表")));
         reg.add(new RegistryEntry("清单模板-5_客户清单",            "客户清单",   PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("客户清单", "主要客户", "前五大客户", "主要客户情况")));
         reg.add(new RegistryEntry("清单模板-4_供应商清单",          "供应商清单", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
@@ -425,7 +434,8 @@ public class ReverseTemplateEngine {
                 .filter(ExcelEntry::isLongText).toList();
         List<ExcelEntry> tableClearEntries = entries.stream()
                 .filter(e -> e.getPlaceholderType() == PlaceholderType.TABLE_CLEAR
-                        || e.getPlaceholderType() == PlaceholderType.TABLE_CLEAR_FULL).toList();
+                        || e.getPlaceholderType() == PlaceholderType.TABLE_CLEAR_FULL
+                        || e.getPlaceholderType() == PlaceholderType.TABLE_ROW_TEMPLATE).toList();
 
         log.info("[ReverseEngine] ExcelEntry总计={} （长文本={}, 数据字段={}, 整表清空={}, BVD={}）",
                 entries.size(),
@@ -528,7 +538,8 @@ public class ReverseTemplateEngine {
             // BVD 类型由 buildBvdEntries 处理，此处跳过
             if ("bvd".equals(reg.getDataSource())) continue;
 
-            if (reg.getType() == PlaceholderType.TABLE_CLEAR || reg.getType() == PlaceholderType.TABLE_CLEAR_FULL) {
+            if (reg.getType() == PlaceholderType.TABLE_CLEAR || reg.getType() == PlaceholderType.TABLE_CLEAR_FULL
+                    || reg.getType() == PlaceholderType.TABLE_ROW_TEMPLATE) {
                 // TABLE_CLEAR / TABLE_CLEAR_FULL：不读值，直接生成清空标记条目，携带标题关键词用于精确表格匹配
                 ExcelEntry entry = new ExcelEntry();
                 entry.setPlaceholderName(reg.getPlaceholderName());
@@ -1649,6 +1660,43 @@ public class ReverseTemplateEngine {
                 }
                 log.debug("[ReverseEngine-TableClear] TABLE_CLEAR_FULL 占位符 '{}' 删除多余行 {} 行，仅保留第1行",
                         entry.getPlaceholderName(), totalRows - 1);
+            } else if (entry.getPlaceholderType() == PlaceholderType.TABLE_ROW_TEMPLATE) {
+                // 行模板克隆策略：
+                // - 第0行（表头行）：原样保留，不动
+                // - 第1行（第一条数据行）：将第0列清空并写入 {{_tpl_{placeholderName}}}，其余列清空
+                // - 第2行起所有行：删除
+                if (rows.size() < 2) {
+                    log.warn("[ReverseEngine-TableClear] TABLE_ROW_TEMPLATE 占位符 '{}' 表格行数不足2行，跳过",
+                            entry.getPlaceholderName());
+                    unmatchedEntries.add(entry);
+                    continue;
+                }
+                String tplMark = "{{_tpl_" + entry.getPlaceholderName() + "}}";
+                // 处理模板行（row 1）：第0列写 tplMark，其余列清空
+                XWPFTableRow tplRow = rows.get(1);
+                List<XWPFTableCell> tplCells = tplRow.getTableCells();
+                for (int ci = 0; ci < tplCells.size(); ci++) {
+                    XWPFTableCell cell = tplCells.get(ci);
+                    String writeText = (ci == 0) ? tplMark : "";
+                    for (XWPFParagraph para : cell.getParagraphs()) {
+                        List<XWPFRun> cellRuns = para.getRuns();
+                        if (!cellRuns.isEmpty()) {
+                            cellRuns.get(0).setText(writeText, 0);
+                            for (int r = 1; r < cellRuns.size(); r++) {
+                                cellRuns.get(r).setText("", 0);
+                            }
+                            writeText = ""; // 后续段落都清空
+                        }
+                    }
+                    cellsCleared++;
+                }
+                // 删除第2行起所有行（从末尾往前删）
+                int totalRows = targetTable.getNumberOfRows();
+                for (int ri = totalRows - 1; ri >= 2; ri--) {
+                    targetTable.removeRow(ri);
+                }
+                log.debug("[ReverseEngine-TableClear] TABLE_ROW_TEMPLATE 占位符 '{}' 删除数据行 {} 行，保留表头+1行模板行（标记={}）",
+                        entry.getPlaceholderName(), totalRows - 2, tplMark);
             } else {
                 // 财务表策略：跳过首列，只清数字列
                 for (XWPFTableRow row : rows) {
@@ -1761,6 +1809,11 @@ public class ReverseTemplateEngine {
 
         // 排除规则4：关联交易汇总表（表头含"关联交易类型"关键词）
         if (headerRowText.contains("关联交易类型")) {
+            return false;
+        }
+
+        // 排除规则4b：关联采购/销售明细表（表头含"关联方名称"关键词）
+        if (headerRowText.contains("关联方名称")) {
             return false;
         }
 
