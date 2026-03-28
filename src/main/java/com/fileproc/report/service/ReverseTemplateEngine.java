@@ -186,7 +186,7 @@ public class ReverseTemplateEngine {
         // ===== 第二类：整表/区域占位符，分两种策略 =====
         // TABLE_CLEAR_FULL（财务状况表整表展开）：整张表全部清空，仅第一格写占位符，生成时从 PL Sheet 逐行展开三列数据
         reg.add(new RegistryEntry("清单模板-PL",                   "PL全表",       PlaceholderType.TABLE_CLEAR_FULL, "list", "PL", null,
-                List.of("财务状况")));
+                List.of("财务状况", "财务数据")));
         reg.add(new RegistryEntry("清单模板-PL含特殊因素调整",      "PL含特殊因素", PlaceholderType.TABLE_CLEAR_FULL, "list", "PL含特殊因素调整", null,
                 List.of("含特殊", "特殊因素调整")));
 
