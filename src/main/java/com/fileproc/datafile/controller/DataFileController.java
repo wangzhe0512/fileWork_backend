@@ -3,6 +3,7 @@ package com.fileproc.datafile.controller;
 import com.fileproc.common.R;
 import com.fileproc.datafile.entity.DataFile;
 import com.fileproc.datafile.service.DataFileService;
+import com.fileproc.datafile.service.DataSourceSchemaService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletResponse;
@@ -41,6 +42,7 @@ import java.util.Map;
 public class DataFileController {
 
     private final DataFileService dataFileService;
+    private final DataSourceSchemaService dataSourceSchemaService;
 
     @Operation(summary = "查询数据文件列表")
     @PreAuthorize("hasAuthority('file:list')")
@@ -98,5 +100,19 @@ public class DataFileController {
              OutputStream out = response.getOutputStream()) {
             in.transferTo(out);
         }
+    }
+
+    @Operation(summary = "触发解析数据文件的Sheet/字段结构（按需调用，结果持久化缓存）")
+    @PreAuthorize("hasAuthority('file:list')")
+    @PostMapping("/{id}/parse-schema")
+    public R<List<DataSourceSchemaService.SheetNode>> parseSchema(@PathVariable String id) {
+        return R.ok(dataSourceSchemaService.parseSchema(id));
+    }
+
+    @Operation(summary = "查询数据文件的Schema（已解析则直接返回，未解析返回空列表）")
+    @PreAuthorize("hasAuthority('file:list')")
+    @GetMapping("/{id}/schema")
+    public R<List<DataSourceSchemaService.SheetNode>> getSchema(@PathVariable String id) {
+        return R.ok(dataSourceSchemaService.getSchemaTree(id));
     }
 }

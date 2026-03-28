@@ -189,12 +189,13 @@ public class CompanyTemplateController {
                     "engine", "llm"
             ));
         } else {
-            // 新引擎降级：同步处理（不再依赖 SystemPlaceholder 规则列表）
+            // 新引擎降级：同步处理（优先使用企业级+系统级动态注册表，回退静态列表）
             ReverseTemplateEngine.ReverseResult result = reverseTemplateEngine.reverse(
                     toAbsPath(histPath),
                     uploadDir + "/" + listPath,
                     uploadDir + "/" + bvdPath,
-                    outAbsPath
+                    outAbsPath,
+                    companyId
             );
 
             // 更新文件大小
