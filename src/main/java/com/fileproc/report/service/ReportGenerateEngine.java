@@ -68,6 +68,13 @@ public class ReportGenerateEngine {
         Map<String, String> textValues = new LinkedHashMap<>();
         // 构建表格占位符数据 Map：占位符名 -> 二维列表（含表头行）
         Map<String, List<List<Object>>> tableValues = new LinkedHashMap<>();
+        // 构建行模板占位符数据 Map：占位符名 -> 行列表（每行为字段名->值的 Map）
+        // 用于 TABLE_ROW_TEMPLATE 类型，fillTableByRowTemplateMapped 按字段名填值
+        Map<String, List<Map<String, Object>>> rowTemplateValues = new LinkedHashMap<>();
+
+        // 行模板类型 Sheet 名集合（用于路由到 extractRowTemplateData）
+        // "6 劳务交易表" 同时对应劳务支出和收入两个占位符，由 extractRowTemplateData 内部按占位符名区分
+        Set<String> rowTemplateSheets = Set.of("4 供应商清单", "5 客户清单", "6 劳务交易表");
 
         for (Placeholder ph : placeholders) {
             String dataSource = ph.getDataSource(); // list / bvd
@@ -94,8 +101,14 @@ public class ReportGenerateEngine {
                 value = expandYearValue(ph.getName(), value);
                 textValues.put(ph.getName(), value != null ? value : "");
             } else if ("table".equals(ph.getType())) {
-                List<List<Object>> tableData = extractTableData(rows, ph.getSourceSheet());
-                tableValues.put(ph.getName(), tableData);
+                if (rowTemplateSheets.contains(ph.getSourceSheet())) {
+                    // 行模板克隆类型：走按字段名提取路径，输出 List<Map<字段名,值>>
+                    List<Map<String, Object>> rowData = extractRowTemplateData(rows, ph.getSourceSheet(), ph.getName());
+                    rowTemplateValues.put(ph.getName(), rowData);
+                } else {
+                    List<List<Object>> tableData = extractTableData(rows, ph.getSourceSheet());
+                    tableValues.put(ph.getName(), tableData);
+                }
             } else if ("chart".equals(ph.getType())) {
                 // 图表：以文字摘要形式嵌入（完整图表嵌入留作 TODO）
                 List<List<Object>> chartData = extractTableData(rows, ph.getSourceSheet());
@@ -119,7 +132,7 @@ public class ReportGenerateEngine {
 
             mergeAllRunsInDocument(doc);
             replaceParagraphPlaceholders(doc, textValues);
-            replaceTablePlaceholders(doc, tableValues);
+            replaceTablePlaceholders(doc, tableValues, rowTemplateValues);
             // 同时替换表格内文本占位符
             replaceTextInTables(doc, textValues);
             // 替换页眉/页脚中的文本占位符
@@ -269,65 +282,8 @@ public class ReportGenerateEngine {
             return result;
         }
 
-        // 供应商清单 / 客户清单 Sheet 专用提取逻辑（行模板克隆方案数据源）
-        // 结构：行0=公司名, 行1=空, 行2=附件标题, 行3=说明, 行4=大表头, 行5=子表头, 行6=分组标题, 行7起=数据
-        // 输出：虚拟空表头行 + [col0=分组/名称/文本, col1=交易金额, col2=占比] 三列
-        if ("4 供应商清单".equals(sheetName) || "5 客户清单".equals(sheetName)) {
-            List<List<Object>> result = new ArrayList<>();
-            // 虚拟空表头（3列），供 fillTableByRowTemplate 跳过 index=0
-            result.add(Arrays.asList("", "", ""));
-
-            for (int i = 7; i < rows.size(); i++) {
-                Map<Integer, Object> row = rows.get(i);
-                Object col0 = row.get(0);
-                Object col1 = row.get(1);
-                Object col2 = row.get(2);
-                Object col4 = row.get(4);
-                Object col5 = row.get(5);
-
-                String col0Str = col0 != null ? col0.toString().trim() : "";
-                String col1Str = col1 != null ? col1.toString().trim() : "";
-                String col2Str = col2 != null ? col2.toString().trim() : "";
-
-                // 分组标题行：col0非空，col1为空（或空白），col2为空
-                if (!col0Str.isEmpty() && col1Str.isEmpty() && col2Str.isEmpty()) {
-                    // 小计/总计行
-                    if (col0Str.contains("小计") || col0Str.contains("合计") || col0Str.contains("总计")) {
-                        result.add(Arrays.asList(col0Str, toPlainString(col4), toPlainString(col5)));
-                    } else {
-                        // 纯分组标题行
-                        result.add(Arrays.asList(col0Str, "", ""));
-                    }
-                    continue;
-                }
-
-                // col1含"小计"/"合计"/"总计"
-                if (!col1Str.isEmpty() && (col1Str.contains("小计") || col1Str.contains("合计") || col1Str.contains("总计"))) {
-                    result.add(Arrays.asList(col1Str, toPlainString(col4), toPlainString(col5)));
-                    continue;
-                }
-
-                // 明细行：col1为纯数字编号 或 "其他"
-                boolean isSeqNum = col1Str.matches("^\\d+$");
-                boolean isOther = "其他".equals(col1Str);
-                if (isSeqNum || isOther) {
-                    if (col2Str.isEmpty() && !isOther) continue; // 名称为空的明细行跳过
-                    String name = isOther ? "其他" : col2Str;
-                    if (!name.isEmpty()) {
-                        result.add(Arrays.asList(name, toPlainString(col4), toPlainString(col5)));
-                    }
-                    continue;
-                }
-
-                // col0含"非关联"：关联区域结束，停止扫描
-                if (col0Str.contains("非关联")) {
-                    break;
-                }
-            }
-
-            log.debug("[ReportEngine] Sheet '{}' 行模板数据提取完成，共 {} 行（含虚拟表头）", sheetName, result.size());
-            return result;
-        }
+        // 供应商清单 / 客户清单 Sheet 由 extractRowTemplateData() 专门处理（行模板克隆按字段名方案）
+        // 此处不再处理，直接走下方通用逻辑（历史兼容：如有遗留旧调用，仍返回全列数据）
 
         List<List<Object>> result = new ArrayList<>();
         // 确定最大列数
@@ -343,6 +299,281 @@ public class ReportGenerateEngine {
             result.add(line);
         }
         return result;
+    }
+
+    /**
+     * 供应商清单 / 客户清单 / 劳务交易表 Sheet 专用行模板数据提取（按字段名方案）。
+     * <p>
+     * Excel Sheet 结构：
+     * <ul>
+     *   <li>供应商/客户清单：行0=公司名, 行1=空, 行2=附件标题, 行3=说明, 行4=大表头，行5=子表头，行6=分组标题，行7起=实际数据</li>
+     *   <li>劳务交易表：行5=表头，行8起=实际数据（行次1-15为劳务收入，行次16-30为劳务支出）</li>
+     * </ul>
+     * 输出：每行为字段名->值的 Map，字段名来自子表头动态解析，不硬编码列索引。
+     * </p>
+     *
+     * @param rows              EasyExcel 读取的行数据（行索引从0开始）
+     * @param sheetName         Sheet 名（用于路由和日志）
+     * @param placeholderName   占位符名称（劳务交易表专用：用于区分收入/支出段）
+     * @return 数据行列表，每行为 Map&lt;字段名, 值&gt;
+     */
+    private List<Map<String, Object>> extractRowTemplateData(List<Map<Integer, Object>> rows, String sheetName, String placeholderName) {
+        // ===== 劳务交易表专用路径 =====
+        if ("6 劳务交易表".equals(sheetName)) {
+            return extractLaborServiceData(rows, placeholderName);
+        }
+
+        // ===== 供应商/客户清单原有逻辑 =====
+        if (rows.size() < 9) {
+            log.warn("[ReportEngine-RowTpl] Sheet '{}' 行数不足，无法提取行模板数据", sheetName);
+            return Collections.emptyList();
+        }
+
+        // 1. 合并解析行5（Excel行5，含"名称"字段）和行6（Excel行6，含"金额/比例"字段）构建 colIdx->字段名 Map
+        //    Excel 该类 Sheet 结构：行5=项目/编号/供应商名称/产品类型/..., 行6=金额(人民币)/占采购比例/...（行5的E列拆分子标题）
+        Map<Integer, String> colNameMap = new LinkedHashMap<>();
+        // 先读行5（0-based index=4），优先级高
+        Map<Integer, Object> headerRow4 = rows.get(4);
+        for (Map.Entry<Integer, Object> entry : headerRow4.entrySet()) {
+            String colName = entry.getValue() != null ? entry.getValue().toString().trim() : "";
+            if (!colName.isEmpty()) {
+                colNameMap.put(entry.getKey(), colName);
+            }
+        }
+        // 再读行6（0-based index=5），补充行5未覆盖的列（如金额子标题列）
+        Map<Integer, Object> headerRow5 = rows.get(5);
+        for (Map.Entry<Integer, Object> entry : headerRow5.entrySet()) {
+            String colName = entry.getValue() != null ? entry.getValue().toString().trim() : "";
+            if (!colName.isEmpty()) {
+                colNameMap.putIfAbsent(entry.getKey(), colName); // 行5已有的列不覆盖
+            }
+        }
+        log.debug("[ReportEngine-RowTpl] Sheet '{}' 子表头解析（合并行5+行6）：{}", sheetName, colNameMap);
+
+        // 找到"名称"列（供应商名称/客户名称等）的列索引：通常在col2，但通过子表头名称动态确定
+        // 名称列：colNameMap 中包含"名称"关键词的列
+        Integer nameColIdx = colNameMap.entrySet().stream()
+                .filter(e -> e.getValue().contains("名称"))
+                .map(Map.Entry::getKey)
+                .findFirst().orElse(2); // fallback col2
+
+        // 金额列：colNameMap 中包含"金额"关键词的列
+        Integer amountColIdx = colNameMap.entrySet().stream()
+                .filter(e -> e.getValue().contains("金额"))
+                .map(Map.Entry::getKey)
+                .findFirst().orElse(4); // fallback col4
+
+        // 占比列：colNameMap 中包含"比例"或"占比"或"比重"关键词的列
+        Integer ratioColIdx = colNameMap.entrySet().stream()
+                .filter(e -> e.getValue().contains("比例") || e.getValue().contains("占比") || e.getValue().contains("比重"))
+                .map(Map.Entry::getKey)
+                .findFirst().orElse(5); // fallback col5
+
+        log.debug("[ReportEngine-RowTpl] Sheet '{}' 关键列定位：名称col={}, 金额col={}, 占比col={}",
+                sheetName, nameColIdx, amountColIdx, ratioColIdx);
+
+        // 2. 从行9（0-based i=8）起扫描数据，跳过行8的"关联供应商/关联客户"大类标题行
+        //    按原有分组/明细/小计逻辑，输出字段名->值的 Map
+        List<Map<String, Object>> result = new ArrayList<>();
+        final int finalNameColIdx = nameColIdx;
+        final int finalAmountColIdx = amountColIdx;
+        final int finalRatioColIdx = ratioColIdx;
+
+        for (int i = 8; i < rows.size(); i++) {
+            Map<Integer, Object> row = rows.get(i);
+            Object col0 = row.get(0);
+            Object col1 = row.get(1);
+            Object colName = row.get(finalNameColIdx);
+
+            String col0Str = col0 != null ? col0.toString().trim() : "";
+            String col1Str = col1 != null ? col1.toString().trim() : "";
+            String colNameStr = colName != null ? colName.toString().trim() : "";
+
+            // 分组标题行：col0非空，col1为空
+            if (!col0Str.isEmpty() && col1Str.isEmpty() && colNameStr.isEmpty()) {
+                if (col0Str.contains("小计") || col0Str.contains("合计") || col0Str.contains("总计")) {
+                    // 小计/总计行：col0存名称，取金额和占比
+                    Map<String, Object> rowMap = buildRowMap(col0Str,
+                            toPlainString(row.get(finalAmountColIdx)),
+                            toPlainString(row.get(finalRatioColIdx)),
+                            colNameMap, finalNameColIdx, finalAmountColIdx, finalRatioColIdx,
+                            "subtotal");
+                    result.add(rowMap);
+                } else {
+                    // 纯分组标题行：只有名称
+                    Map<String, Object> rowMap = buildRowMap(col0Str, "", "",
+                            colNameMap, finalNameColIdx, finalAmountColIdx, finalRatioColIdx,
+                            "group");
+                    result.add(rowMap);
+                }
+                continue;
+            }
+
+            // col1含"小计"/"合计"/"总计"
+            if (!col1Str.isEmpty() && (col1Str.contains("小计") || col1Str.contains("合计") || col1Str.contains("总计"))) {
+                Map<String, Object> rowMap = buildRowMap(col1Str,
+                        toPlainString(row.get(finalAmountColIdx)),
+                        toPlainString(row.get(finalRatioColIdx)),
+                        colNameMap, finalNameColIdx, finalAmountColIdx, finalRatioColIdx,
+                        "subtotal");
+                result.add(rowMap);
+                continue;
+            }
+
+            // 明细行：col1为纯数字编号 或 "其他"（兼容旧格式 Excel）
+            boolean isSeqNum = col1Str.matches("^\\d+$");
+            boolean isOther = "其他".equals(col1Str);
+            if (isSeqNum || isOther) {
+                String name = isOther ? "其他" : colNameStr;
+                if (name.isEmpty() && !isOther) continue; // 名称为空跳过
+                if (!name.isEmpty()) {
+                    Map<String, Object> rowMap = buildRowMap(name,
+                            toPlainString(row.get(finalAmountColIdx)),
+                            toPlainString(row.get(finalRatioColIdx)),
+                            colNameMap, finalNameColIdx, finalAmountColIdx, finalRatioColIdx,
+                            "data");
+                    result.add(rowMap);
+                }
+                continue;
+            }
+
+            // 兜底 data 行：col0 为空 且 名称列非空 且 不含小计类词
+            // 覆盖 Excel 中 col1 直接为供应商/客户名称（非数字序号）的情况
+            if (col0Str.isEmpty() && !colNameStr.isEmpty()
+                    && !colNameStr.contains("小计") && !colNameStr.contains("合计") && !colNameStr.contains("总计")) {
+                Map<String, Object> rowMap = buildRowMap(colNameStr,
+                        toPlainString(row.get(finalAmountColIdx)),
+                        toPlainString(row.get(finalRatioColIdx)),
+                        colNameMap, finalNameColIdx, finalAmountColIdx, finalRatioColIdx,
+                        "data");
+                result.add(rowMap);
+                continue;
+            }
+
+            // col0含"非关联"：关联区域结束，停止扫描
+            if (col0Str.contains("非关联")) {
+                break;
+            }
+        }
+
+        log.debug("[ReportEngine-RowTpl] Sheet '{}' 行模板数据提取完成，共 {} 行", sheetName, result.size());
+        return result;
+    }
+
+    /**
+     * 劳务交易表（6 劳务交易表）专用行模板数据提取。
+     * <p>
+     * Excel 结构（0-based行索引）：
+     * <ul>
+     *   <li>行5（index=5）：表头行，列2=关联方名称，列4=交易金额，列5=比例，列6=占总劳务收入比重</li>
+     *   <li>行8（index=8）起：实际数据，行次由 col0 决定</li>
+     *   <li>行次1-7（index 8-14）：劳务收入-境外；行次7（index 14）：境外小计</li>
+     *   <li>行次8-14（index 15-21）：劳务收入-境内；行次14（index 21）：境内小计</li>
+     *   <li>行次15（index 22）：收入合计</li>
+     *   <li>行次16-22（index 23-29）：劳务支出-境外；行次22（index 29）：境外小计</li>
+     *   <li>行次23-29（index 30-36）：劳务支出-境内；行次29（index 36）：境内小计</li>
+     *   <li>行次30（index 37）：支出合计</li>
+     * </ul>
+     * 占位符名含"支出"→取行次16-30（支出段），否则取行次1-15（收入段）。
+     * </p>
+     *
+     * @param rows            EasyExcel 读取的行数据
+     * @param placeholderName 占位符名称，用于区分支出/收入段
+     * @return 数据行列表，每行为 Map&lt;字段名, 值&gt;
+     */
+    private List<Map<String, Object>> extractLaborServiceData(List<Map<Integer, Object>> rows, String placeholderName) {
+        // 固定列映射（基于表头行结构）
+        final String NAME_FIELD   = "关联方名称";
+        final String AMOUNT_FIELD = "交易金额";
+        // 占比字段名依据收入/支出占位符区分
+        final boolean isExpense = placeholderName != null && placeholderName.contains("支出");
+        final String RATIO_FIELD  = isExpense ? "占总经营成本费用比重（%）" : "占营业收入比重（%）";
+
+        // 名称列=col2, 金额列=col4, 占比列=col6（收入）或col6（支出，仅有col5）
+        // 实测清单：col5=比例(百分比), col6=占总劳务收入比重 → 统一取col4金额,col5占比
+        final int NAME_COL   = 2;
+        final int AMOUNT_COL = 4;
+        final int RATIO_COL  = 5;
+
+        // 数据范围（0-based行索引）
+        // 表头行index=5，数据从index=8开始（行次1）
+        // 收入段：行次1-15 → index 8-22 (inclusive)
+        // 支出段：行次16-30 → index 23-37 (inclusive)
+        int dataStart = isExpense ? 23 : 8;
+        int dataEnd   = isExpense ? 38 : 23;  // exclusive
+
+        List<Map<String, Object>> result = new ArrayList<>();
+
+        for (int i = dataStart; i < dataEnd && i < rows.size(); i++) {
+            Map<Integer, Object> row = rows.get(i);
+            Object col0 = row.get(0); // 行次
+            Object col1 = row.get(1); // 关联交易类型（分组标题）
+            Object colName = row.get(NAME_COL);
+
+            String col0Str   = col0   != null ? col0.toString().trim()   : "";
+            String col1Str   = col1   != null ? col1.toString().trim()   : "";
+            String nameStr   = colName != null ? colName.toString().trim() : "";
+
+            // 跳过完全空行（col0和col1都为空）
+            if (col0Str.isEmpty() && col1Str.isEmpty()) continue;
+
+            // 小计/合计行：col1含"小计"/"合计"
+            if (col1Str.contains("小计") || col1Str.contains("合计") || col1Str.contains("总计")) {
+                Map<String, Object> map = new LinkedHashMap<>();
+                map.put(NAME_FIELD,   col1Str);
+                map.put(AMOUNT_FIELD, toPlainString(row.get(AMOUNT_COL)));
+                map.put(RATIO_FIELD,  toPlainString(row.get(RATIO_COL)));
+                map.put("_rowType",   "subtotal");
+                result.add(map);
+                continue;
+            }
+
+            // 分组标题行：col1含"境外"/"境内"（且名称列为空或含"────"）
+            if ((col1Str.contains("境外") || col1Str.contains("境内"))
+                    && (nameStr.isEmpty() || nameStr.contains("────"))) {
+                // 取分组标签，去掉换行符
+                String groupLabel = col1Str.replace("\n", "").replace("\r", "").trim();
+                Map<String, Object> map = new LinkedHashMap<>();
+                map.put(NAME_FIELD,   groupLabel);
+                map.put(AMOUNT_FIELD, "");
+                map.put(RATIO_FIELD,  "");
+                map.put("_rowType",   "group");
+                result.add(map);
+                continue;
+            }
+
+            // "────"占位行（其他关联方占位符行）：跳过
+            if (nameStr.equals("────") || nameStr.equals("其他关联方")) continue;
+
+            // 明细行：名称列非空且不含上述关键词
+            if (!nameStr.isEmpty()) {
+                Map<String, Object> map = new LinkedHashMap<>();
+                map.put(NAME_FIELD,   nameStr);
+                map.put(AMOUNT_FIELD, toPlainString(row.get(AMOUNT_COL)));
+                map.put(RATIO_FIELD,  toPlainString(row.get(RATIO_COL)));
+                map.put("_rowType",   "data");
+                result.add(map);
+            }
+        }
+
+        log.debug("[ReportEngine-Labor] placeholderName='{}' ({}), 提取数据行={}", placeholderName, isExpense ? "支出" : "收入", result.size());
+        return result;
+    }
+    private Map<String, Object> buildRowMap(String name, String amount, String ratio,
+                                             Map<Integer, String> colNameMap,
+                                             int nameColIdx, int amountColIdx, int ratioColIdx,
+                                             String rowType) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        // 按动态字段名存入
+        String nameField = colNameMap.getOrDefault(nameColIdx, "名称");
+        String amountField = colNameMap.getOrDefault(amountColIdx, "交易金额");
+        String ratioField = colNameMap.getOrDefault(ratioColIdx, "占比");
+        map.put(nameField, name);
+        map.put(amountField, amount);
+        map.put(ratioField, ratio);
+        // 存入行类型标识，供填充引擎按类型路由到对应模板行克隆
+        map.put("_rowType", rowType != null ? rowType : "data");
+        return map;
     }
 
     /**
@@ -486,8 +717,13 @@ public class ReportGenerateEngine {
     /**
      * 替换表格占位符：找到含 {{tableName}} 标记的段落，
      * 若该段落位于表格内，则将数据填入该表格；否则在文档中创建新表格。
+     * <p>
+     * 同时处理行模板克隆类型（rowTemplateValues），按字段名填充。
+     * </p>
      */
-    private void replaceTablePlaceholders(XWPFDocument doc, Map<String, List<List<Object>>> tableValues) {
+    private void replaceTablePlaceholders(XWPFDocument doc, Map<String, List<List<Object>>> tableValues,
+                                          Map<String, List<Map<String, Object>>> rowTemplateValues) {
+        // 处理普通表格占位符
         for (Map.Entry<String, List<List<Object>>> entry : tableValues.entrySet()) {
             String phName = entry.getKey();
             List<List<Object>> data = entry.getValue();
@@ -530,6 +766,25 @@ public class ReportGenerateEngine {
                         }
                     }
                 }
+            }
+        }
+
+        // 处理行模板克隆占位符（按字段名填充）
+        for (Map.Entry<String, List<Map<String, Object>>> entry : rowTemplateValues.entrySet()) {
+            String phName = entry.getKey();
+            List<Map<String, Object>> rowData = entry.getValue();
+            // 行模板的整表标识 marker 仍是 {{_tpl_占位符名}}，在 cell 内部，
+            // 通过扫描含 {{_tpl_ 的表格来定位，然后调用 fillTableByRowTemplateMapped
+            boolean found = false;
+            for (XWPFTable table : doc.getTables()) {
+                if (tableHasRowTemplateMarkerFor(table, phName)) {
+                    fillTableByRowTemplateMapped(table, rowData);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                log.warn("[ReportEngine-RowTpl] 未在文档中找到占位符 '{}' 对应的行模板表格", phName);
             }
         }
     }
@@ -740,6 +995,263 @@ public class ReportGenerateEngine {
 
         log.info("[ReportEngine-RowTemplate] 行模板克隆完成：模板行idx={}，克隆插入 {} 行，数据行数={}",
                 tplRowIdx, insertedCount, data.size() - 1);
+    }
+
+    /**
+     * 检测表格中是否存在指定占位符名称的行模板标记（{{_tpl_占位符名}}）。
+     *
+     * @param table       Word 表格
+     * @param phName      占位符名称
+     * @return 是否找到对应的行模板标记
+     */
+    private boolean tableHasRowTemplateMarkerFor(XWPFTable table, String phName) {
+        String tplMarker = "{{_tpl_" + phName + "}}";
+        for (XWPFTableRow row : table.getRows()) {
+            for (XWPFTableCell cell : row.getTableCells()) {
+                String text = cell.getText();
+                if (text != null && text.contains(tplMarker)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 行模板克隆按字段名填充表格（新方案，替代按列索引的旧方案）。
+     * <p>
+     * 逻辑：
+     * <ol>
+     *   <li>扫描表格，找到含 {@code {{_tpl_}} 标记的模板行（tplRowIdx）</li>
+     *   <li>对 rowData 每条数据（Map&lt;字段名,值&gt;），深克隆模板行 XML</li>
+     *   <li>对克隆行每个 cell，读取 cell 文本中的 {@code {{_col_字段名}}}，按字段名查 Map 取值填入</li>
+     *   <li>无 {@code {{_col_}}} 标记的列清空；无法匹配字段名时留空并记录警告</li>
+     *   <li>将所有新行插入模板行之前，最后删除原模板行</li>
+     * </ol>
+     * </p>
+     *
+     * @param table   目标 Word 表格
+     * @param rowData 数据行列表，每行为字段名->值的 Map
+     */
+    private void fillTableByRowTemplateMapped(XWPFTable table, List<Map<String, Object>> rowData) {
+        if (rowData == null) {
+            rowData = Collections.emptyList();
+        }
+
+        CTTbl ctTbl = table.getCTTbl();
+
+        // 1. 扫描所有行，识别模板行（data/group/subtotal），记录每行的类型和索引
+        //    与反向生成的逻辑对应：保留原表格所有行，每行都有占位符
+        class RowInfo {
+            int idx;
+            String type; // "data", "group", "subtotal"
+            List<String> colFields; // 该行的列字段名列表
+            RowInfo(int idx, String type, List<String> colFields) {
+                this.idx = idx; this.type = type; this.colFields = colFields;
+            }
+        }
+        List<RowInfo> allTplRows = new ArrayList<>();
+
+        for (int i = 0; i < table.getRows().size(); i++) {
+            XWPFTableRow row = table.getRow(i);
+            String rowText = row.getTableCells().stream()
+                    .map(c -> c.getText() != null ? c.getText() : "")
+                    .reduce("", String::concat);
+
+            String rowType = null;
+            if (rowText.contains("{{_tpl_") || rowText.contains("{{_row_data}}")) {
+                rowType = "data";
+            } else if (rowText.contains("{{_row_group}}")) {
+                rowType = "group";
+            } else if (rowText.contains("{{_row_subtotal}}")) {
+                rowType = "subtotal";
+            }
+
+            if (rowType != null) {
+                List<String> colFields = new ArrayList<>();
+                for (XWPFTableCell cell : row.getTableCells()) {
+                    colFields.add(extractColFieldName(cell.getText()));
+                }
+                allTplRows.add(new RowInfo(i, rowType, colFields));
+            }
+        }
+
+        if (allTplRows.isEmpty()) {
+            log.warn("[ReportEngine-RowTplMapped] 未找到任何模板行标记（{{_tpl_}} / {{_row_XXX}}），跳过");
+            return;
+        }
+
+        // 2. 动态调整行数：根据数据行数克隆或删除模板行
+        //    策略：使用第一个 data 模板行作为基准，所有数据行都用这个模板克隆
+        //    group/subtotal 行保持原样（假设数据格式与模板一致）
+        RowInfo dataTpl = allTplRows.stream().filter(r -> "data".equals(r.type)).findFirst().orElse(null);
+        if (dataTpl == null) {
+            log.warn("[ReportEngine-RowTplMapped] 未找到 data 类型模板行，跳过");
+            return;
+        }
+
+        int dataRowCount = (int) allTplRows.stream().filter(r -> "data".equals(r.type)).count();
+        int actualDataCount = rowData.size();
+
+        log.info("[ReportEngine-RowTplMapped] 模板中 data 行数={}, 实际数据行数={}", dataRowCount, actualDataCount);
+
+        // 收集所有 data 行索引（从后往前处理，避免索引漂移）
+        List<Integer> dataRowIdxList = allTplRows.stream()
+                .filter(r -> "data".equals(r.type))
+                .map(r -> r.idx)
+                .sorted(java.util.Comparator.reverseOrder())
+                .collect(java.util.stream.Collectors.toList());
+
+        int netChange = 0;
+
+        if (actualDataCount > dataRowCount) {
+            // 需要克隆：用最后一个 data 模板行克隆 (actualDataCount - dataRowCount) 次
+            int needClone = actualDataCount - dataRowCount;
+            int lastDataIdx = dataRowIdxList.get(0);
+            XWPFTableRow lastDataRow = table.getRow(lastDataIdx + netChange); // 考虑已插入的偏移
+
+            for (int i = 0; i < needClone; i++) {
+                CTRow newCt = (CTRow) lastDataRow.getCtRow().copy();
+                int insertPos = lastDataIdx + netChange + 1; // 插入到最后一个 data 行之后
+                insertRowAt(table, newCt, insertPos);
+                netChange++;
+            }
+            log.debug("[ReportEngine-RowTplMapped] 克隆了 {} 行", needClone);
+        } else if (actualDataCount < dataRowCount) {
+            // 需要删除：从后往前删除多余的 data 行
+            int needDelete = dataRowCount - actualDataCount;
+            for (int i = 0; i < needDelete && i < dataRowIdxList.size(); i++) {
+                int idxToDelete = dataRowIdxList.get(i) + netChange;
+                removeRowAt(table, idxToDelete);
+                netChange--;
+            }
+            log.debug("[ReportEngine-RowTplMapped] 删除了 {} 行", needDelete);
+        }
+
+        // 3. 重新扫描所有模板行（因为行数已变化），填充数据
+        List<RowInfo> finalTplRows = new ArrayList<>();
+        for (int i = 0; i < table.getRows().size(); i++) {
+            XWPFTableRow row = table.getRow(i);
+            String rowText = row.getTableCells().stream()
+                    .map(c -> c.getText() != null ? c.getText() : "")
+                    .reduce("", String::concat);
+
+            String rowType = null;
+            if (rowText.contains("{{_tpl_") || rowText.contains("{{_row_data}}")) {
+                rowType = "data";
+            } else if (rowText.contains("{{_row_group}}")) {
+                rowType = "group";
+            } else if (rowText.contains("{{_row_subtotal}}")) {
+                rowType = "subtotal";
+            }
+
+            if (rowType != null) {
+                List<String> colFields = new ArrayList<>();
+                for (XWPFTableCell cell : row.getTableCells()) {
+                    colFields.add(extractColFieldName(cell.getText()));
+                }
+                finalTplRows.add(new RowInfo(i, rowType, colFields));
+            }
+        }
+
+        // 4. 填充数据
+        int dataIdx = 0;
+        for (RowInfo info : finalTplRows) {
+            XWPFTableRow row = table.getRow(info.idx);
+
+            if ("data".equals(info.type) && dataIdx < rowData.size()) {
+                Map<String, Object> dataMap = rowData.get(dataIdx);
+                fillRowWithData(row, info.colFields, dataMap);
+                dataIdx++;
+            } else if ("data".equals(info.type)) {
+                // 多余的 data 行（不应该发生，但保险起见清空）
+                fillRowWithData(row, info.colFields, Collections.emptyMap());
+            }
+            // group/subtotal 行保持原样（或者可以填充汇总数据，如果需要的话）
+        }
+
+        log.info("[ReportEngine-RowTplMapped] 行模板填充完成：处理了 {} 个模板行，填充了 {} 行数据",
+                finalTplRows.size(), dataIdx);
+    }
+
+    /**
+     * 在指定位置插入新行
+     */
+    private void insertRowAt(XWPFTable table, CTRow newCt, int pos) {
+        CTTbl ctTbl = table.getCTTbl();
+        org.w3c.dom.Node tblNode = ctTbl.getDomNode();
+        org.w3c.dom.NodeList trNodes = tblNode.getChildNodes();
+        int trCount = 0;
+        org.w3c.dom.Node refNode = null;
+        for (int ni = 0; ni < trNodes.getLength(); ni++) {
+            org.w3c.dom.Node n = trNodes.item(ni);
+            if ("w:tr".equals(n.getNodeName())) {
+                if (trCount == pos) {
+                    refNode = n;
+                    break;
+                }
+                trCount++;
+            }
+        }
+        org.w3c.dom.Node imported = tblNode.getOwnerDocument().importNode(newCt.getDomNode(), true);
+        if (refNode != null) {
+            tblNode.insertBefore(imported, refNode);
+        } else {
+            tblNode.appendChild(imported);
+        }
+    }
+
+    /**
+     * 删除指定位置的行
+     */
+    private void removeRowAt(XWPFTable table, int pos) {
+        CTTbl ctTbl = table.getCTTbl();
+        org.w3c.dom.Node tblNode = ctTbl.getDomNode();
+        org.w3c.dom.NodeList trNodes = tblNode.getChildNodes();
+        int trCount = 0;
+        for (int ni = 0; ni < trNodes.getLength(); ni++) {
+            org.w3c.dom.Node n = trNodes.item(ni);
+            if ("w:tr".equals(n.getNodeName())) {
+                if (trCount == pos) {
+                    tblNode.removeChild(n);
+                    break;
+                }
+                trCount++;
+            }
+        }
+    }
+
+    /**
+     * 用数据填充一行
+     */
+    private void fillRowWithData(XWPFTableRow row, List<String> colFields, Map<String, Object> dataMap) {
+        List<XWPFTableCell> cells = row.getTableCells();
+        int colLimit = Math.min(cells.size(), colFields.size());
+        for (int ci = 0; ci < colLimit; ci++) {
+            String fieldName = colFields.get(ci);
+            String cellVal;
+            if (fieldName != null && dataMap.containsKey(fieldName)) {
+                Object val = dataMap.get(fieldName);
+                cellVal = val != null ? val.toString() : "";
+            } else {
+                cellVal = "";
+            }
+            setCellText(cells.get(ci), cellVal);
+        }
+    }
+
+    /**
+     * 从 cell 文本中提取 {{_col_字段名}} 的字段名部分。
+     * 例如 "{{_tpl_xxx}} {{_col_供应商名称}}" → "供应商名称"
+     * 若无 {{_col_}} 标记，返回 null。
+     */
+    private String extractColFieldName(String cellText) {
+        if (cellText == null) return null;
+        int start = cellText.indexOf("{{_col_");
+        if (start < 0) return null;
+        int end = cellText.indexOf("}}", start + 7);
+        if (end < 0) return null;
+        return cellText.substring(start + 7, end).trim();
     }
 
     /**

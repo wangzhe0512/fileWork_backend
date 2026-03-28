@@ -108,6 +108,13 @@ public class ReverseTemplateEngine {
          */
         List<String> titleKeywords;
 
+        /**
+         * TABLE_ROW_TEMPLATE 专用：列字段名定义列表，index 对应 Word 表格列索引。
+         * 反向生成时每列写入 {{_col_字段名}}；生成时按字段名从 Excel 行 Map 取值。
+         * 其他类型为 null。
+         */
+        List<String> columnDefs;
+
         /** 构造方法（原6参数，DATA_CELL/LONG_TEXT/BVD 使用，titleKeywords=null） */
         RegistryEntry(String placeholderName, String displayName, PlaceholderType type,
                       String dataSource, String sheetName, String cellAddress) {
@@ -118,6 +125,7 @@ public class ReverseTemplateEngine {
             this.sheetName = sheetName;
             this.cellAddress = cellAddress;
             this.titleKeywords = null;
+            this.columnDefs = null;
         }
 
         /** 构造方法（7参数，TABLE_CLEAR 使用，额外传入前置标题关键词列表） */
@@ -131,6 +139,21 @@ public class ReverseTemplateEngine {
             this.sheetName = sheetName;
             this.cellAddress = cellAddress;
             this.titleKeywords = titleKeywords;
+            this.columnDefs = null;
+        }
+
+        /** 构造方法（8参数，TABLE_ROW_TEMPLATE 使用，额外传入列字段名列表） */
+        RegistryEntry(String placeholderName, String displayName, PlaceholderType type,
+                      String dataSource, String sheetName, String cellAddress,
+                      List<String> titleKeywords, List<String> columnDefs) {
+            this.placeholderName = placeholderName;
+            this.displayName = displayName;
+            this.type = type;
+            this.dataSource = dataSource;
+            this.sheetName = sheetName;
+            this.cellAddress = cellAddress;
+            this.titleKeywords = titleKeywords;
+            this.columnDefs = columnDefs;
         }
     }
 
@@ -183,16 +206,26 @@ public class ReverseTemplateEngine {
         // TABLE_ROW_TEMPLATE：行模板克隆（动态行数明细表），注意需在 客户清单/供应商清单 之前注册，防止关键词抢先匹配
         reg.add(new RegistryEntry("清单模板-4_供应商关联采购明细", "关联采购明细",
                 PlaceholderType.TABLE_ROW_TEMPLATE, "list", "4 供应商清单", null,
-                List.of("关联采购交易明细", "关联采购明细表", "采购交易明细表")));
+                List.of("关联采购交易明细", "关联采购明细表", "采购交易明细表"),
+                List.of("供应商名称", "金额（人民币）", "占关联采购总金额比例")));
         reg.add(new RegistryEntry("清单模板-5_客户关联销售明细", "关联销售明细",
                 PlaceholderType.TABLE_ROW_TEMPLATE, "list", "5 客户清单", null,
-                List.of("关联销售交易明细", "关联销售明细表", "销售交易明细表")));
+                List.of("关联销售交易明细", "关联销售明细表", "销售交易明细表"),
+                List.of("客户名称", "金额（人民币）", "占营业收入比例")));
         reg.add(new RegistryEntry("清单模板-5_客户清单",            "客户清单",   PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("客户清单", "主要客户", "前五大客户", "主要客户情况")));
         reg.add(new RegistryEntry("清单模板-4_供应商清单",          "供应商清单", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("供应商清单", "主要供应商", "前五大供应商", "供应商情况")));
-        reg.add(new RegistryEntry("清单模板-6_劳务交易表",          "劳务交易表", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
-                List.of("劳务交易", "劳务服务", "劳务收费")));
+        // TABLE_ROW_TEMPLATE：劳务支出/收入明细表（动态行数，共用 "6 劳务交易表" Sheet，按行次范围区分）
+        // 注意：需在下方 TABLE_CLEAR_FULL 劳务成本条目之前注册，防止关键词被后者抢先匹配
+        reg.add(new RegistryEntry("清单模板-6_劳务支出明细", "接受关联劳务明细",
+                PlaceholderType.TABLE_ROW_TEMPLATE, "list", "6 劳务交易表", null,
+                List.of("接受关联劳务明细", "关联劳务支出明细", "劳务支出明细表"),
+                List.of("关联方名称", "交易金额", "占总经营成本费用比重（%）")));
+        reg.add(new RegistryEntry("清单模板-6_劳务收入明细", "提供关联劳务明细",
+                PlaceholderType.TABLE_ROW_TEMPLATE, "list", "6 劳务交易表", null,
+                List.of("提供关联劳务明细", "关联劳务收入明细", "劳务收入明细表"),
+                List.of("关联方名称", "交易金额", "占营业收入比重（%）")));
         reg.add(new RegistryEntry("清单模板-劳务成本费用归集",      "劳务成本费用", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
                 List.of("劳务成本", "费用归集", "成本归集")));
         reg.add(new RegistryEntry("清单模板-资金融通",              "资金融通",   PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
@@ -315,6 +348,12 @@ public class ReverseTemplateEngine {
          * clearTableBlock 阶段用于精确匹配表格前置标题段落，其余类型为 null。
          */
         private List<String> titleKeywords;
+        /**
+         * TABLE_ROW_TEMPLATE 专用：列字段名定义列表，来自注册表 RegistryEntry.columnDefs。
+         * 反向生成时每列写入 {{_col_字段名}}；生成时按字段名从 Excel 行 Map 取值。
+         * 其他类型为 null。
+         */
+        private List<String> columnDefs;
     }
 
     /** 待确认的占位符项（返回给前端供人工确认） */
@@ -550,6 +589,7 @@ public class ReverseTemplateEngine {
                 entry.setLongText(false);
                 entry.setPlaceholderType(reg.getType());
                 entry.setTitleKeywords(reg.getTitleKeywords());
+                entry.setColumnDefs(reg.getColumnDefs());
                 tableClearEntries.add(entry);
                 continue;
             }
@@ -1464,19 +1504,7 @@ public class ReverseTemplateEngine {
                 String phMark = "{{" + bvdPlaceholders[bvdIdx] + "}}";
 
                 // 写入占位符到第2列单元格
-                List<XWPFParagraph> paras = dataCell.getParagraphs();
-                if (!paras.isEmpty()) {
-                    XWPFParagraph para = paras.get(0);
-                    List<XWPFRun> cellRuns = para.getRuns();
-                    if (!cellRuns.isEmpty()) {
-                        cellRuns.get(0).setText(phMark, 0);
-                        for (int r = 1; r < cellRuns.size(); r++) {
-                            cellRuns.get(r).setText("", 0);
-                        }
-                    } else {
-                        para.createRun().setText(phMark);
-                    }
-                }
+                writeCellText(dataCell, phMark);
 
                 // 记录匹配
                 MatchedPlaceholder mp = new MatchedPlaceholder();
@@ -1629,28 +1657,19 @@ public class ReverseTemplateEngine {
                 continue;
             }
             int colCount = rows.get(0).getTableCells().size();
-            int cellsCleared = 0;
+            int[] cellsCleared = {0}; // 使用数组绕过lambda的final限制
 
             if (entry.getPlaceholderType() == PlaceholderType.TABLE_CLEAR_FULL) {
                 // 整表全清空策略：遍历所有行所有列，第一个非空单元格写占位符，其余全部清空
                 boolean firstCellWritten = false;
                 for (XWPFTableRow row : rows) {
                     for (XWPFTableCell cell : row.getTableCells()) {
-                        for (XWPFParagraph para : cell.getParagraphs()) {
-                            List<XWPFRun> cellRuns = para.getRuns();
-                            if (!cellRuns.isEmpty()) {
-                                if (!firstCellWritten) {
-                                    cellRuns.get(0).setText(phMark, 0);
-                                    firstCellWritten = true;
-                                } else {
-                                    cellRuns.get(0).setText("", 0);
-                                }
-                                for (int r = 1; r < cellRuns.size(); r++) {
-                                    cellRuns.get(r).setText("", 0);
-                                }
-                            }
+                        String writeText = firstCellWritten ? "" : phMark;
+                        writeCellText(cell, writeText);
+                        if (!firstCellWritten) {
+                            firstCellWritten = true;
                         }
-                        cellsCleared++;
+                        cellsCleared[0]++;
                     }
                 }
                 // 删除第2行起的所有多余空行，只保留第一行（含占位符）
@@ -1661,10 +1680,14 @@ public class ReverseTemplateEngine {
                 log.debug("[ReverseEngine-TableClear] TABLE_CLEAR_FULL 占位符 '{}' 删除多余行 {} 行，仅保留第1行",
                         entry.getPlaceholderName(), totalRows - 1);
             } else if (entry.getPlaceholderType() == PlaceholderType.TABLE_ROW_TEMPLATE) {
-                // 行模板克隆策略：
-                // - 第0行（表头行）：原样保留，不动
-                // - 第1行（第一条数据行）：将第0列清空并写入 {{_tpl_{placeholderName}}}，其余列清空
-                // - 第2行起所有行：删除
+                // 行模板克隆策略（保留所有行，每行写占位符）：
+                // - 第0行（表头行）：原样保留
+                // - 第1行起：每行识别行类型（group/data/subtotal），写入对应占位符
+                //   * data行（明细行）：第0列写 "{{_tpl_占位符名}} {{_row_data}} {{_col_字段名}}"
+                //   * group行（分组标题行）：第0列写 "{{_row_group}} {{_col_字段名}}"
+                //   * subtotal行（小计/合计行）：第0列写 "{{_row_subtotal}} {{_col_字段名}}"
+                //   * 其余列按 columnDefs[ci] 写 "{{_col_字段名}}"
+                // - 保留原表格所有行，不删除任何行
                 if (rows.size() < 2) {
                     log.warn("[ReverseEngine-TableClear] TABLE_ROW_TEMPLATE 占位符 '{}' 表格行数不足2行，跳过",
                             entry.getPlaceholderName());
@@ -1672,31 +1695,181 @@ public class ReverseTemplateEngine {
                     continue;
                 }
                 String tplMark = "{{_tpl_" + entry.getPlaceholderName() + "}}";
-                // 处理模板行（row 1）：第0列写 tplMark，其余列清空
-                XWPFTableRow tplRow = rows.get(1);
-                List<XWPFTableCell> tplCells = tplRow.getTableCells();
-                for (int ci = 0; ci < tplCells.size(); ci++) {
-                    XWPFTableCell cell = tplCells.get(ci);
-                    String writeText = (ci == 0) ? tplMark : "";
-                    for (XWPFParagraph para : cell.getParagraphs()) {
-                        List<XWPFRun> cellRuns = para.getRuns();
-                        if (!cellRuns.isEmpty()) {
-                            cellRuns.get(0).setText(writeText, 0);
-                            for (int r = 1; r < cellRuns.size(); r++) {
-                                cellRuns.get(r).setText("", 0);
-                            }
-                            writeText = ""; // 后续段落都清空
+                List<String> colDefs = entry.getColumnDefs();
+
+                // 辅助方法：写占位符文本到一行的各列
+                java.util.function.BiConsumer<XWPFTableRow, String> writeRowMarkers = (row, rowTypeMark) -> {
+                    List<XWPFTableCell> tplCells2 = row.getTableCells();
+                    // 找到第一个非垂直合并延续的单元格索引（用于写行标记）
+                    int firstNonMergeColIdx = -1;
+                    for (int i = 0; i < tplCells2.size(); i++) {
+                        if (!isVerticalMergeContinue(tplCells2.get(i))) {
+                            firstNonMergeColIdx = i;
+                            break;
                         }
                     }
-                    cellsCleared++;
+                    if (firstNonMergeColIdx < 0) {
+                        log.debug("[ReverseEngine-TableClear] 该行所有单元格都是垂直合并延续，跳过写入");
+                        return;
+                    }
+
+                    for (int ci = 0; ci < tplCells2.size(); ci++) {
+                        XWPFTableCell cell = tplCells2.get(ci);
+
+                        // 跳过垂直合并的延续单元格（这些单元格属于上一行的一部分）
+                        if (isVerticalMergeContinue(cell)) {
+                            log.debug("[ReverseEngine-TableClear] 跳过垂直合并延续单元格 ci={}", ci);
+                            continue;
+                        }
+
+                        // 列字段名映射：根据 tplCells2.size() 动态调整，处理合并单元格导致的列错位
+                        String colMark = "";
+                        if (colDefs != null && !colDefs.isEmpty()) {
+                            int sizeDiff = colDefs.size() - tplCells2.size();
+                            int defIdx = ci + sizeDiff;
+                            if (defIdx >= 0 && defIdx < colDefs.size()) {
+                                colMark = "{{_col_" + colDefs.get(defIdx) + "}}";
+                            }
+                        }
+                        final String writeText;
+                        if (ci == firstNonMergeColIdx) {
+                            // 第一个非合并单元格：写入 tplMark + rowTypeMark + colMark
+                            // 所有行类型（data/group/subtotal）都加上 tplMark，以便识别属于哪个数据表
+                            String prefix = tplMark + " " + rowTypeMark;
+                            writeText = colMark.isEmpty() ? prefix : prefix + " " + colMark;
+                        } else {
+                            writeText = colMark;
+                        }
+                        writeCellText(cell, writeText);
+                        cellsCleared[0]++;
+                    }
+                };
+
+                // 行类型判断规则
+                //   subtotal：任意列文本含"小计"/"合计"/"总计"，或末行且整行合并
+                //   group：整行合并（gridSpan之和 = 表头列数）且不是末行
+                //   data：其他情况（普通数据行）
+                int headerColCount = rows.get(0).getTableCells().size();
+                int processedRows = 0;
+
+                for (int ri = 1; ri < rows.size(); ri++) {
+                    XWPFTableRow row = rows.get(ri);
+                    List<XWPFTableCell> rowCells = row.getTableCells();
+
+                    // 拼接所有列文本用于判断
+                    StringBuilder allText = new StringBuilder();
+                    for (XWPFTableCell cell : rowCells) {
+                        allText.append(cell.getText() != null ? cell.getText().trim() : "");
+                    }
+                    String allStr = allText.toString();
+
+                    // 判断行类型
+                    String rowTypeMark;
+                    if (allStr.contains("小计") || allStr.contains("合计") || allStr.contains("总计")) {
+                        // 明确包含合计关键词的行标记为subtotal
+                        rowTypeMark = "{{_row_subtotal}}";
+                    } else if (isGroupRow(row)) {
+                        // Group行（分组标题行）：第一列有内容且有垂直合并特征
+                        rowTypeMark = "{{_row_group}}";
+                    } else if (isFullRowMerged(row, headerColCount)) {
+                        // 整行合并的情况：根据是否是最后一行判断类型
+                        if (ri == rows.size() - 1) {
+                            // 末行整行合并 → 合计行
+                            rowTypeMark = "{{_row_subtotal}}";
+                        } else {
+                            // 中间整行合并 → 分组标题行
+                            rowTypeMark = "{{_row_group}}";
+                        }
+                    } else {
+                        // 普通数据行（单元格数=表头列数，无整行合并）
+                        rowTypeMark = "{{_row_data}}";
+                    }
+
+                    writeRowMarkers.accept(row, rowTypeMark);
+                    processedRows++;
                 }
-                // 删除第2行起所有行（从末尾往前删）
-                int totalRows = targetTable.getNumberOfRows();
-                for (int ri = totalRows - 1; ri >= 2; ri--) {
-                    targetTable.removeRow(ri);
+
+                // 精简行数：只保留第1行data行和第1行group行作为模板，删除其他多余行，保留subtotal行
+                // 重新获取rows（因为可能已被修改）
+                rows = targetTable.getRows();
+                List<Integer> dataRowIndices = new ArrayList<>();
+                List<Integer> groupRowIndices = new ArrayList<>();
+                List<Integer> subtotalRowIndices = new ArrayList<>();
+                headerColCount = rows.get(0).getTableCells().size();
+
+                for (int ri = 1; ri < rows.size(); ri++) {
+                    XWPFTableRow row = rows.get(ri);
+                    List<XWPFTableCell> rowCells = row.getTableCells();
+
+                    // 拼接所有列文本用于判断行类型（此时单元格中已是占位符）
+                    StringBuilder allText = new StringBuilder();
+                    for (XWPFTableCell cell : rowCells) {
+                        allText.append(cell.getText() != null ? cell.getText().trim() : "");
+                    }
+                    String allStr = allText.toString();
+
+                    // 判断行类型（根据占位符判断，因为此时单元格中已是占位符）
+                    if (allStr.contains("{{_row_subtotal}}")) {
+                        // subtotal行（含{{_row_subtotal}}占位符）
+                        subtotalRowIndices.add(ri);
+                    } else if (allStr.contains("{{_row_group}}")) {
+                        // group行（含{{_row_group}}占位符）
+                        groupRowIndices.add(ri);
+                    } else if (allStr.contains("{{_row_data}}") || allStr.contains("{{_tpl_")) {
+                        // data行（含{{_row_data}}或{{_tpl_占位符名}}）
+                        dataRowIndices.add(ri);
+                    } else {
+                        // 其他情况：根据整行合并判断
+                        if (isFullRowMerged(row, headerColCount) && ri == rows.size() - 1) {
+                            subtotalRowIndices.add(ri);
+                        } else {
+                            dataRowIndices.add(ri);
+                        }
+                    }
                 }
-                log.debug("[ReverseEngine-TableClear] TABLE_ROW_TEMPLATE 占位符 '{}' 删除数据行 {} 行，保留表头+1行模板行（标记={}）",
-                        entry.getPlaceholderName(), totalRows - 2, tplMark);
+
+                // 删除多余的group行（只保留第1个group行），从后往前删避免索引错乱
+                if (groupRowIndices.size() > 1) {
+                    log.debug("[ReverseEngine-TableClear] TABLE_ROW_TEMPLATE 占位符 '{}' 删除多余group行 {} 行，保留第1行",
+                            entry.getPlaceholderName(), groupRowIndices.size() - 1);
+                    for (int i = groupRowIndices.size() - 1; i >= 1; i--) {
+                        int rowIdx = groupRowIndices.get(i);
+                        targetTable.removeRow(rowIdx);
+                    }
+                }
+
+                // 删除多余的data行（只保留第1个data行），从后往前删避免索引错乱
+                if (dataRowIndices.size() > 1) {
+                    log.debug("[ReverseEngine-TableClear] TABLE_ROW_TEMPLATE 占位符 '{}' 删除多余data行 {} 行，保留第1行",
+                            entry.getPlaceholderName(), dataRowIndices.size() - 1);
+                    for (int i = dataRowIndices.size() - 1; i >= 1; i--) {
+                        int rowIdx = dataRowIndices.get(i);
+                        targetTable.removeRow(rowIdx);
+                    }
+                }
+
+                // 统计保留的行类型
+                int finalGroupRowCount = 0;
+                int finalSubtotalRowCount = 0;
+                int finalDataRowCount = 0;
+                for (int ri = 1; ri < targetTable.getRows().size(); ri++) {
+                    XWPFTableRow row = targetTable.getRows().get(ri);
+                    StringBuilder rowText = new StringBuilder();
+                    for (XWPFTableCell cell : row.getTableCells()) {
+                        rowText.append(cell.getText() != null ? cell.getText().trim() : "");
+                    }
+                    String rowStr = rowText.toString();
+                    if (rowStr.contains("{{_row_group}}")) {
+                        finalGroupRowCount++;
+                    } else if (rowStr.contains("{{_row_subtotal}}")) {
+                        finalSubtotalRowCount++;
+                    } else if (rowStr.contains("{{_row_data}}")) {
+                        finalDataRowCount++;
+                    }
+                }
+
+                log.debug("[ReverseEngine-TableClear] TABLE_ROW_TEMPLATE 占位符 '{}' 处理完成，保留 {} 行（表头+{}group+{}data+{}subtotal），tplMark={}",
+                        entry.getPlaceholderName(), targetTable.getNumberOfRows(), finalGroupRowCount, finalDataRowCount, finalSubtotalRowCount, tplMark);
             } else {
                 // 财务表策略：跳过首列，只清数字列
                 for (XWPFTableRow row : rows) {
@@ -1709,21 +1882,13 @@ public class ReverseTemplateEngine {
                         if (!cellText.matches("-?[\\d,]+(\\.[\\d]+)?%?") &&
                                 !cellText.matches("-?[\\d,.\\s]+")) continue;
 
-                        // 清空该单元格所有段落，写入占位符标记
-                        for (XWPFParagraph para : cell.getParagraphs()) {
-                            List<XWPFRun> cellRuns = para.getRuns();
-                            if (!cellRuns.isEmpty()) {
-                                cellRuns.get(0).setText(phMark, 0);
-                                for (int r = 1; r < cellRuns.size(); r++) {
-                                    cellRuns.get(r).setText("", 0);
-                                }
-                            }
-                        }
-                        cellsCleared++;
+                        // 清空该单元格并写入占位符标记
+                        writeCellText(cell, phMark);
+                        cellsCleared[0]++;
                     }
                 }
             }
-            clearedCount += cellsCleared;
+            clearedCount += cellsCleared[0];
 
             // 记录匹配
             MatchedPlaceholder mp = new MatchedPlaceholder();
@@ -2533,7 +2698,316 @@ public class ReverseTemplateEngine {
         }
     }
 
+    /**
+     * 向单元格写入文本。
+     *
+     * <p>使用 XML 游标深度遍历段落内的所有 {@code <w:t>} 节点（无论嵌套在什么 XML 结构中），
+     * 彻底避免 POI {@code para.getRuns()} 遗漏部分 Run 导致旧文字残留。
+     *
+     * <ul>
+     *   <li>第一个 {@code <w:t>}：设置为目标文本，并添加 {@code xml:space="preserve"} 防止空格截断。</li>
+     *   <li>其余 {@code <w:t>}：设置为字符串 ""（保留节点结构，避免破坏脚注引用等）。</li>
+     *   <li>若段落内无任何 {@code <w:t>}，则用 {@code para.createRun().setText(text)} 新建 Run 写入。</li>
+     *   <li>只向第一个非空段落写入文本；后续段落的所有 {@code <w:t>} 一律清空。</li>
+     * </ul>
+     *
+     * @param cell 目标单元格
+     * @param text 要写入的文本（可为空字符串，表示清空）
+     */
+    private void writeCellText(XWPFTableCell cell, String text) {
+        List<XWPFParagraph> paras = cell.getParagraphs();
+        if (paras.isEmpty()) {
+            if (!text.isEmpty()) {
+                XWPFRun run = cell.addParagraph().createRun();
+                run.setText(text);
+            }
+            return;
+        }
+        final String tNamespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        final String localName = "t";
+        boolean written = false;
+        for (XWPFParagraph para : paras) {
+            // 使用 XML 游标深度遍历所有 <w:t> 节点
+            org.apache.xmlbeans.XmlCursor cursor = para.getCTP().newCursor();
+            java.util.List<org.apache.xmlbeans.XmlObject> tNodes = new java.util.ArrayList<>();
+            try {
+                // 先收集所有 <w:t> 节点
+                if (cursor.toFirstChild()) {
+                    do {
+                        if (tNamespace.equals(cursor.getName().getNamespaceURI())
+                                && localName.equals(cursor.getName().getLocalPart())) {
+                            org.apache.xmlbeans.XmlObject tObj = cursor.getObject();
+                            if (tObj != null) tNodes.add(tObj);
+                        }
+                        // 递归遍历子元素
+                        collectTNodes(cursor, tNamespace, localName, tNodes);
+                    } while (cursor.toNextSibling());
+                }
+            } finally {
+                cursor.dispose();
+            }
+            if (tNodes.isEmpty()) {
+                // 无 <w:t> 节点：若需要写入，新建 Run
+                if (!written && !text.isEmpty()) {
+                    XWPFRun run = para.createRun();
+                    run.setText(text);
+                    written = true;
+                }
+                continue;
+            }
+            // 第一个 <w:t>：写入目标文本
+            if (!written) {
+                org.apache.xmlbeans.XmlObject firstT = tNodes.get(0);
+                if (firstT instanceof CTText) {
+                    CTText ct = (CTText) firstT;
+                    ct.setStringValue(text);
+                    ct.setSpace(org.apache.xmlbeans.impl.xb.xmlschema.SpaceAttribute.Space.PRESERVE);
+                } else {
+                    // 如果是 XmlAnyType 等其他类型，尝试用 DOM 操作
+                    org.apache.xmlbeans.XmlCursor tCursor = firstT.newCursor();
+                    try {
+                        if (tCursor.toFirstContentToken() != org.apache.xmlbeans.XmlCursor.TokenType.NONE) {
+                            tCursor.removeXmlContents();
+                        }
+                        tCursor.toStartDoc();
+                        tCursor.insertChars(text);
+                    } finally {
+                        tCursor.dispose();
+                    }
+                }
+                written = true;
+                // 其余 <w:t>：清空
+                for (int i = 1; i < tNodes.size(); i++) {
+                    org.apache.xmlbeans.XmlObject tObj = tNodes.get(i);
+                    if (tObj instanceof CTText) {
+                        ((CTText) tObj).setStringValue("");
+                    } else {
+                        org.apache.xmlbeans.XmlCursor tc = tObj.newCursor();
+                        try {
+                            tc.removeXmlContents();
+                            tc.toStartDoc();
+                            tc.insertChars("");
+                        } finally {
+                            tc.dispose();
+                        }
+                    }
+                }
+            } else {
+                // 后续段落：所有 <w:t> 清空
+                for (org.apache.xmlbeans.XmlObject tObj : tNodes) {
+                    if (tObj instanceof CTText) {
+                        ((CTText) tObj).setStringValue("");
+                    } else {
+                        org.apache.xmlbeans.XmlCursor tc = tObj.newCursor();
+                        try {
+                            tc.removeXmlContents();
+                            tc.toStartDoc();
+                            tc.insertChars("");
+                        } finally {
+                            tc.dispose();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 递归收集游标下的所有 <w:t> 节点。
+     */
+    private void collectTNodes(org.apache.xmlbeans.XmlCursor cursor, String tNamespace,
+                               String localName, java.util.List<org.apache.xmlbeans.XmlObject> tNodes) {
+        org.apache.xmlbeans.XmlCursor child = cursor.newCursor();
+        try {
+            if (child.toFirstChild()) {
+                do {
+                    if (tNamespace.equals(child.getName().getNamespaceURI())
+                            && localName.equals(child.getName().getLocalPart())) {
+                        org.apache.xmlbeans.XmlObject tObj = child.getObject();
+                        if (tObj != null) tNodes.add(tObj);
+                    }
+                    // 递归
+                    collectTNodes(child, tNamespace, localName, tNodes);
+                } while (child.toNextSibling());
+            }
+        } finally {
+            child.dispose();
+        }
+    }
+
     // ========== 辅助方法 ==========
+
+    /**
+     * 判断一行是否是"整行合并"（即该行所有单元格的gridSpan之和等于表头列数，且单元格数少于表头列数）。
+     * <p>
+     * 用于区分：
+     * - group行：整行合并的分类标题行（如"关联方A"横跨整表）
+     * - subtotal行：整行合并的合计行（末行）
+     * - data行：普通数据行（单元格数=表头列数，无合并）
+     * </p>
+     *
+     * @param row 表格行
+     * @param headerColCount 表头列数（标准列数）
+     * @return true表示该行是整行合并（所有单元格的gridSpan之和等于headerColCount）
+     */
+    private boolean isFullRowMerged(XWPFTableRow row, int headerColCount) {
+        List<XWPFTableCell> cells = row.getTableCells();
+        // 如果单元格数等于表头列数，说明没有合并（或每列都是独立单元格）
+        if (cells.size() == headerColCount) {
+            return false;
+        }
+        // 计算所有单元格的gridSpan之和
+        int totalSpan = 0;
+        for (XWPFTableCell cell : cells) {
+            totalSpan += getCellGridSpan(cell);
+        }
+        // 如果gridSpan之和等于表头列数，说明是整行合并
+        return totalSpan == headerColCount;
+    }
+
+    /**
+     * 获取单元格的gridSpan值（跨列数）。
+     * <p>通过CTTcPr获取gridSpan，默认为1（无跨列）。</p>
+     *
+     * @param cell 表格单元格
+     * @return gridSpan值，默认为1
+     */
+    private int getCellGridSpan(XWPFTableCell cell) {
+        try {
+            org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTc tc = cell.getCTTc();
+            if (tc != null && tc.isSetTcPr()) {
+                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTcPr tcPr = tc.getTcPr();
+                if (tcPr.isSetGridSpan()) {
+                    return tcPr.getGridSpan().getVal().intValue();
+                }
+            }
+        } catch (Exception e) {
+            log.debug("[ReverseEngine] 获取单元格gridSpan失败: {}", e.getMessage());
+        }
+        return 1; // 默认无跨列
+    }
+
+    /**
+     * 判断一行是否是group行（分组标题行）。
+     * <p>
+     * Group行特征：
+     * - 第一列有内容（如"境外采购"）
+     * - 第一列是垂直合并的起始行（vMerge=restart）
+     * - 后续列可能为空或被合并
+     * - 不是subtotal行（不包含"小计/合计/总计"关键词）
+     * </p>
+     *
+     * @param row 表格行
+     * @return true表示该行是group行
+     */
+    private boolean isGroupRow(XWPFTableRow row) {
+        List<XWPFTableCell> cells = row.getTableCells();
+        if (cells.isEmpty()) {
+            return false;
+        }
+
+        // 获取第一列
+        XWPFTableCell firstCell = cells.get(0);
+        String firstCellText = firstCell.getText() != null ? firstCell.getText().trim() : "";
+
+        // 第一列为空，不是group行
+        if (firstCellText.isEmpty()) {
+            return false;
+        }
+
+        // 如果包含"小计/合计/总计"，则是subtotal行，不是group行
+        if (firstCellText.contains("小计") || firstCellText.contains("合计") || firstCellText.contains("总计")) {
+            return false;
+        }
+
+        // 检查第一列是否是垂直合并的起始行（vMerge=restart 或 val=null）
+        // 只有垂直合并的起始行才是 group 行，延续行（continue）不是
+        try {
+            org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTc tc = firstCell.getCTTc();
+            if (tc != null && tc.isSetTcPr()) {
+                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTcPr tcPr = tc.getTcPr();
+                if (tcPr.isSetVMerge()) {
+                    Object vMergeObj = tcPr.getVMerge();
+                    if (vMergeObj != null) {
+                        String vMergeStr = vMergeObj.toString().toLowerCase();
+                        // 只有不是 continue 的才是起始行（restart 或 null）
+                        if (!vMergeStr.contains("continue")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.debug("[ReverseEngine] 检查垂直合并失败: {}", e.getMessage());
+        }
+
+        // 检查是否是"整行合并"的情况（第一列有内容，其他列被合并）
+        if (cells.size() == 1) {
+            // 只有一列单元格，可能是整行合并的情况
+            return true;
+        }
+
+        // 检查第一列之后的所有列是否为空或被合并
+        boolean otherColumnsEmpty = true;
+        for (int i = 1; i < cells.size(); i++) {
+            String cellText = cells.get(i).getText() != null ? cells.get(i).getText().trim() : "";
+            if (!cellText.isEmpty()) {
+                otherColumnsEmpty = false;
+                break;
+            }
+        }
+
+        // 如果后续列为空且第一列有内容，可能是group行
+        return otherColumnsEmpty;
+    }
+
+    /**
+     * 判断某行是否是垂直合并的延续行（第一列单元格是vMerge continue）。
+     * 这类行是group行的从属行，在子模板中不需要保留。
+     *
+     * @param row 表格行
+     * @return true表示该行的第一列是垂直合并延续单元格（应被删除）
+     */
+    private boolean isVMergeContinueRow(XWPFTableRow row) {
+        List<XWPFTableCell> cells = row.getTableCells();
+        if (cells.isEmpty()) {
+            return false;
+        }
+        // 判断第一列是否是垂直合并延续单元格
+        return isVerticalMergeContinue(cells.get(0));
+    }
+
+    /**
+     * 判断单元格是否是垂直合并的延续单元格（vMerge=continue）。
+     * <p>
+     * 垂直合并的单元格在Word XML中表示为：
+     * - 起始单元格：vMerge="restart" 或 vMerge属性存在但val为null
+     * - 延续单元格：vMerge="continue"
+     * </p>
+     *
+     * @param cell 单元格
+     * @return true表示该单元格是垂直合并的延续部分（不应单独写入标记）
+     */
+    private boolean isVerticalMergeContinue(XWPFTableCell cell) {
+        try {
+            org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTc tc = cell.getCTTc();
+            if (tc != null && tc.isSetTcPr()) {
+                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTcPr tcPr = tc.getTcPr();
+                if (tcPr.isSetVMerge()) {
+                    Object vMergeObj = tcPr.getVMerge();
+                    if (vMergeObj != null) {
+                        String vMergeStr = vMergeObj.toString().toLowerCase();
+                        // 只有明确包含continue的才是延续单元格
+                        // restart或null表示起始单元格
+                        return vMergeStr.contains("continue");
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.debug("[ReverseEngine] 检查垂直合并延续失败: {}", e.getMessage());
+        }
+        return false;
+    }
 
     private void addPendingIfNotExists(List<PendingConfirmItem> pendingList, String phName,
                                         String value, String location, String reason) {
