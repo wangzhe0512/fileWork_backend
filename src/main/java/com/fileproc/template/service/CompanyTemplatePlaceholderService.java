@@ -396,7 +396,7 @@ public class CompanyTemplatePlaceholderService {
     // ========== 新增方法：绑定状态 ==========
 
     /**
-     * 查询子模板全量占位符，每条附带绑定状态（bound/unbound）、positionCount、registryLevel
+     * 查询子模板占位符（按 placeholderName 聚合），附带绑定状态、positionCount、registryLevel
      * <p>
      * - positionCount：该占位符在文档中出现的总次数（同 templateId 下同名记录数）
      * - registryLevel：关联注册表的级别（system/company/custom，查不到则为 custom）
@@ -405,32 +405,34 @@ public class CompanyTemplatePlaceholderService {
      *
      * @param templateId 子模板ID
      * @param companyId  企业ID（用于查注册表级别，可为 null）
-     * @return 带绑定状态的占位符列表
+     * @return 按 placeholderName 聚合后的占位符列表
      */
-    public List<PlaceholderBindingVO> listWithBindingStatus(String templateId, String companyId) {
+    public List<PlaceholderGroupVO> listWithBindingStatus(String templateId, String companyId) {
         List<CompanyTemplatePlaceholder> list = placeholderMapper.selectByTemplateId(templateId);
 
-        // 统计每个 placeholderName 的出现次数
-        List<Map<String, Object>> countRows = placeholderMapper.countGroupByName(templateId);
-        Map<String, Integer> countMap = new HashMap<>();
-        for (Map<String, Object> row : countRows) {
-            String name = (String) row.get("placeholder_name");
-            Object cntObj = row.get("cnt");
-            int cnt = cntObj instanceof Number ? ((Number) cntObj).intValue() : 0;
-            countMap.put(name, cnt);
-        }
+        // 按 placeholderName 分组
+        Map<String, List<CompanyTemplatePlaceholder>> grouped = list.stream()
+                .collect(Collectors.groupingBy(CompanyTemplatePlaceholder::getPlaceholderName));
 
-        // 查注册表级别（每个 placeholderName 查一次，结果缓存）
+        // 查注册表级别（缓存）
         Map<String, String> levelCache = new HashMap<>();
 
-        return list.stream().map(ph -> {
-            String bindingStatus = (ph.getSourceSheet() != null && !ph.getSourceSheet().isBlank()
-                    && ph.getSourceField() != null && !ph.getSourceField().isBlank())
-                    ? "bound" : "unbound";
+        return grouped.entrySet().stream().map(entry -> {
+            String placeholderName = entry.getKey();
+            List<CompanyTemplatePlaceholder> positions = entry.getValue();
+            CompanyTemplatePlaceholder first = positions.get(0);
 
-            int positionCount = countMap.getOrDefault(ph.getPlaceholderName(), 1);
+            // positionCount = 同名记录数
+            int positionCount = positions.size();
 
-            String registryLevel = levelCache.computeIfAbsent(ph.getPlaceholderName(), name -> {
+            // bindingStatus：只要有一条记录绑定了就算 bound
+            boolean isBound = positions.stream().anyMatch(ph ->
+                    ph.getSourceSheet() != null && !ph.getSourceSheet().isBlank()
+                            && ph.getSourceField() != null && !ph.getSourceField().isBlank());
+            String bindingStatus = isBound ? "bound" : "unbound";
+
+            // registryLevel
+            String registryLevel = levelCache.computeIfAbsent(placeholderName, name -> {
                 try {
                     PlaceholderRegistry reg = placeholderRegistryMapper.selectEffectiveByName(
                             name, companyId != null ? companyId : "");
@@ -440,18 +442,24 @@ public class CompanyTemplatePlaceholderService {
                 }
             });
 
-            return new PlaceholderBindingVO(ph, bindingStatus, positionCount, registryLevel);
+            return new PlaceholderGroupVO(
+                    first.getId(),
+                    first.getCompanyTemplateId(),
+                    first.getModuleId(),
+                    placeholderName,
+                    first.getName(),
+                    first.getType(),
+                    first.getDataSource(),
+                    first.getSourceSheet(),
+                    first.getSourceField(),
+                    first.getDescription(),
+                    first.getSort(),
+                    bindingStatus,
+                    positionCount,
+                    registryLevel,
+                    positions
+            );
         }).collect(Collectors.toList());
-    }
-
-    /**
-     * 兼容旧接口（不传 companyId，registryLevel 全部返回 custom）
-     *
-     * @deprecated 建议使用 {@link #listWithBindingStatus(String, String)}
-     */
-    @Deprecated
-    public List<PlaceholderBindingVO> listWithBindingStatus(String templateId) {
-        return listWithBindingStatus(templateId, null);
     }
 
     /**
@@ -662,7 +670,75 @@ public class CompanyTemplatePlaceholderService {
     ) {}
 
     /**
-     * 占位符绑定状态 VO
+     * 占位符分组 VO（按 placeholderName 聚合）
+     * <p>
+     * 用于占位符管理面板卡片展示，每个卡片代表一个占位符名称：
+     * - positionCount：该占位符在文档中出现的总次数
+     * - registryLevel：system / company / custom
+     * - bindingStatus：bound / unbound
+     * - positions：该占位符的所有位置记录列表
+     * </p>
+     */
+    public static class PlaceholderGroupVO {
+        private final String id;
+        private final String companyTemplateId;
+        private final String moduleId;
+        private final String placeholderName;
+        private final String name;
+        private final String type;
+        private final String dataSource;
+        private final String sourceSheet;
+        private final String sourceField;
+        private final String description;
+        private final Integer sort;
+        private final String bindingStatus;
+        private final int positionCount;
+        private final String registryLevel;
+        private final List<CompanyTemplatePlaceholder> positions;
+
+        public PlaceholderGroupVO(String id, String companyTemplateId, String moduleId,
+                                   String placeholderName, String name, String type,
+                                   String dataSource, String sourceSheet, String sourceField,
+                                   String description, Integer sort,
+                                   String bindingStatus, int positionCount, String registryLevel,
+                                   List<CompanyTemplatePlaceholder> positions) {
+            this.id = id;
+            this.companyTemplateId = companyTemplateId;
+            this.moduleId = moduleId;
+            this.placeholderName = placeholderName;
+            this.name = name;
+            this.type = type;
+            this.dataSource = dataSource;
+            this.sourceSheet = sourceSheet;
+            this.sourceField = sourceField;
+            this.description = description;
+            this.sort = sort;
+            this.bindingStatus = bindingStatus;
+            this.positionCount = positionCount;
+            this.registryLevel = registryLevel;
+            this.positions = positions;
+        }
+
+        // Getters
+        public String getId() { return id; }
+        public String getCompanyTemplateId() { return companyTemplateId; }
+        public String getModuleId() { return moduleId; }
+        public String getPlaceholderName() { return placeholderName; }
+        public String getName() { return name; }
+        public String getType() { return type; }
+        public String getDataSource() { return dataSource; }
+        public String getSourceSheet() { return sourceSheet; }
+        public String getSourceField() { return sourceField; }
+        public String getDescription() { return description; }
+        public Integer getSort() { return sort; }
+        public String getBindingStatus() { return bindingStatus; }
+        public int getPositionCount() { return positionCount; }
+        public String getRegistryLevel() { return registryLevel; }
+        public List<CompanyTemplatePlaceholder> getPositions() { return positions; }
+    }
+
+    /**
+     * 占位符绑定状态 VO（单条记录，保留兼容）
      * <p>
      * 扩展 CompanyTemplatePlaceholder，追加以下字段：
      * - bindingStatus：bound / unbound

@@ -796,23 +796,24 @@ public class CompanyTemplateController {
     // ========== 新增：占位符绑定状态接口 ==========
 
     /**
-     * 查询子模板全量占位符及其绑定状态
+     * 查询子模板占位符绑定状态列表（按 placeholderName 聚合）
      * <p>
-     * 用于子模板在线编辑页面右侧面板展示占位符列表，每条记录附带：
+     * 用于子模板在线编辑页面右侧面板展示占位符卡片列表，每个卡片代表一个占位符名称，包含：
      * - bindingStatus（bound/unbound）
-     * - positionCount（在文档中插入的数量）
+     * - positionCount（该占位符在文档中出现的总次数）
      * - registryLevel（system/company/custom）
+     * - positions（该占位符的所有位置记录列表，供详情展示）
      * </p>
      *
      * @param templateId 子模板ID
      * @param companyId  企业ID（用于查注册表级别，可选）
      */
     @GetMapping("/{templateId}/placeholders/binding-status")
-    public R<List<CompanyTemplatePlaceholderService.PlaceholderBindingVO>> listPlaceholderBindingStatus(
+    public R<List<CompanyTemplatePlaceholderService.PlaceholderGroupVO>> listPlaceholderBindingStatus(
             @PathVariable String templateId,
             @RequestParam(required = false) String companyId) {
         companyTemplateService.getById(templateId); // 校验子模板存在
-        List<CompanyTemplatePlaceholderService.PlaceholderBindingVO> list =
+        List<CompanyTemplatePlaceholderService.PlaceholderGroupVO> list =
                 placeholderService.listWithBindingStatus(templateId, companyId);
         return R.ok(list);
     }
