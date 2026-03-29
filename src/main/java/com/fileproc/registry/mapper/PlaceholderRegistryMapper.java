@@ -46,4 +46,23 @@ public interface PlaceholderRegistryMapper extends BaseMapper<PlaceholderRegistr
      */
     @Select("SELECT * FROM placeholder_registry WHERE level = 'company' AND company_id = #{companyId} AND placeholder_name = #{name} AND deleted = 0 LIMIT 1")
     PlaceholderRegistry selectCompanyByName(@Param("companyId") String companyId, @Param("name") String name);
+
+    /**
+     * 按 placeholder_name 查询有效规则（企业级优先系统级，用于获取 registryLevel 标签）
+     * <p>
+     * 返回企业级和系统级均包含的结果，由业务层取优先级最高的那条。
+     * </p>
+     */
+    @Select("SELECT * FROM placeholder_registry " +
+            "WHERE placeholder_name = #{name} AND deleted = 0 AND enabled = 1 " +
+            "  AND (level = 'system' OR (level = 'company' AND company_id = #{companyId})) " +
+            "ORDER BY CASE level WHEN 'company' THEN 0 ELSE 1 END " +
+            "LIMIT 1")
+    PlaceholderRegistry selectEffectiveByName(@Param("name") String name, @Param("companyId") String companyId);
+
+    /**
+     * 按 ID 查询注册表条目（不过滤 enabled，用于"从库添加"场景）
+     */
+    @Select("SELECT * FROM placeholder_registry WHERE id = #{id} AND deleted = 0 LIMIT 1")
+    PlaceholderRegistry selectActiveById(@Param("id") String id);
 }

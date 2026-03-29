@@ -15,6 +15,8 @@ import javax.crypto.SecretKey;
 import java.util.Date;
 import com.fileproc.datafile.entity.DataFile;
 import com.fileproc.datafile.mapper.DataFileMapper;
+import com.fileproc.registry.entity.PlaceholderRegistry;
+import com.fileproc.registry.service.PlaceholderRegistryService;
 import com.fileproc.report.service.ReverseTemplateEngine;
 import com.fileproc.template.entity.CompanyTemplate;
 import com.fileproc.template.entity.CompanyTemplateModule;
@@ -88,6 +90,7 @@ public class CompanyTemplateController {
     private final DataFileMapper dataFileMapper;
     private final CompanyTemplatePlaceholderMapper placeholderMapper;
     private final JwtUtil jwtUtil;
+    private final PlaceholderRegistryService placeholderRegistryService;
 
     @Value("${file.upload-dir:./uploads}")
     private String uploadDir;
@@ -790,6 +793,148 @@ public class CompanyTemplateController {
         return R.ok("同步完成", result);
     }
 
+    // ========== 新增：占位符绑定状态接口 ==========
+
+    /**
+     * 查询子模板全量占位符及其绑定状态
+     * <p>
+     * 用于子模板在线编辑页面右侧面板展示占位符列表，每条记录附带：
+     * - bindingStatus（bound/unbound）
+     * - positionCount（在文档中插入的数量）
+     * - registryLevel（system/company/custom）
+     * </p>
+     *
+     * @param templateId 子模板ID
+     * @param companyId  企业ID（用于查注册表级别，可选）
+     */
+    @GetMapping("/{templateId}/placeholders/binding-status")
+    public R<List<CompanyTemplatePlaceholderService.PlaceholderBindingVO>> listPlaceholderBindingStatus(
+            @PathVariable String templateId,
+            @RequestParam(required = false) String companyId) {
+        companyTemplateService.getById(templateId); // 校验子模板存在
+        List<CompanyTemplatePlaceholderService.PlaceholderBindingVO> list =
+                placeholderService.listWithBindingStatus(templateId, companyId);
+        return R.ok(list);
+    }
+
+    /**
+     * 快速绑定/解绑：仅更新占位符的 sourceSheet 和 sourceField
+     * <p>
+     * 解绑时两个字段均传 null 即可清空。
+     * </p>
+     */
+    @PatchMapping("/{templateId}/placeholders/{phId}/bind")
+    public R<CompanyTemplatePlaceholder> bindPlaceholder(
+            @PathVariable String templateId,
+            @PathVariable String phId,
+            @RequestBody CompanyTemplatePlaceholderService.BindingRequest request) {
+        companyTemplateService.getById(templateId); // 校验子模板存在
+        CompanyTemplatePlaceholder updated = placeholderService.updateBinding(
+                phId, templateId, request.sourceSheet(), request.sourceField());
+        return R.ok("绑定已更新", updated);
+    }
+
+    /**
+     * 原子操作：就地新建企业级注册表规则并绑定到当前占位符
+     * <p>
+     * 在一个事务内完成两步：
+     * 1. 创建企业级注册表条目（PlaceholderRegistry，level=company）
+     * 2. 将占位符的 sourceSheet/sourceField 绑定到该规则的数据源字段
+     * <p>
+     * placeholderName 自动从占位符记录读取，无需前端传入。
+     * 若同名企业级规则已存在，返回 400，前端提示"已有规则，是否去编辑"。
+     * </p>
+     *
+     * @param templateId 子模板ID
+     * @param phId       占位符ID
+     * @param request    新建注册表规则所需字段 + companyId
+     */
+    @PostMapping("/{templateId}/placeholders/{phId}/create-registry-and-bind")
+    @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)
+    public R<Map<String, Object>> createRegistryAndBind(
+            @PathVariable String templateId,
+            @PathVariable String phId,
+            @RequestBody CreateRegistryAndBindRequest request) {
+
+        companyTemplateService.getById(templateId); // 校验子模板存在
+
+        // 1. 查询占位符（获取 placeholderName）
+        CompanyTemplatePlaceholder ph = placeholderMapper.selectById(phId);
+        if (ph == null) throw BizException.notFound("占位符");
+        if (!templateId.equals(ph.getCompanyTemplateId())) {
+            throw BizException.forbidden("该占位符不属于指定子模板");
+        }
+
+        // 2. 构造企业级注册表条目（placeholderName 自动从占位符读取）
+        PlaceholderRegistry entry = new PlaceholderRegistry();
+        entry.setLevel("company");
+        entry.setCompanyId(request.getCompanyId());
+        entry.setPlaceholderName(ph.getPlaceholderName());
+        entry.setDisplayName(request.getDisplayName() != null ? request.getDisplayName() : ph.getName());
+        entry.setPhType(request.getPhType());
+        entry.setDataSource(request.getDataSource());
+        entry.setSheetName(request.getSheetName());
+        entry.setCellAddress(request.getCellAddress());
+        entry.setEnabled(1);
+
+        // 3. 保存注册表条目（内部已做重复校验）
+        PlaceholderRegistry savedEntry = placeholderRegistryService.saveEntry(entry);
+
+        // 4. 绑定占位符的 sourceSheet/sourceField
+        CompanyTemplatePlaceholder updatedPh = placeholderService.updateBinding(
+                phId, templateId, request.getSheetName(), request.getCellAddress());
+
+        log.info("[CompanyTemplateController] 注册表规则已创建并绑定: templateId={}, phId={}, registryId={}",
+                templateId, phId, savedEntry.getId());
+
+        return R.ok("注册表规则已创建并绑定", Map.of(
+                "registryEntry", savedEntry,
+                "placeholder", updatedPh
+        ));
+    }
+
+    /**
+     * 从占位符库选已有规则，添加到子模板
+     * <p>
+     * 场景：弹框中用户从现有注册表条目中选中某条，点击"添加"。
+     * - 若该 placeholderName 已存在于此子模板，返回 400「不能重复添加」
+     * - 新建的占位符实例会继承注册表规则的 sourceSheet/sourceField 绑定
+     * </p>
+     *
+     * @param templateId 子模板ID
+     * @param request    包含 registryId（必填）和 moduleId（可选）
+     */
+    @PostMapping("/{templateId}/placeholders/add-from-registry")
+    public R<CompanyTemplatePlaceholder> addFromRegistry(
+            @PathVariable String templateId,
+            @RequestBody CompanyTemplatePlaceholderService.AddFromRegistryRequest request) {
+        companyTemplateService.getById(templateId); // 校验子模板存在
+        CompanyTemplatePlaceholder ph = placeholderService.addFromRegistry(
+                templateId, request.registryId(), request.moduleId());
+        return R.ok("占位符已添加", ph);
+    }
+
+    /**
+     * 全新新建：同时创建企业级注册表规则 + 子模板占位符实例
+     * <p>
+     * 场景：弹框中用户在占位符库里找不到想要的，选择"新建"。
+     * 与 create-registry-and-bind 的区别：
+     * - create-registry-and-bind：先有占位符实例（由反向引擎生成），再给它创建注册表规则
+     * - create-new-with-registry：从零开始，同时创建注册表规则和占位符实例
+     * </p>
+     *
+     * @param templateId 子模板ID
+     * @param request    新建参数（companyId/placeholderName/phType/dataSource/sheetName 等）
+     */
+    @PostMapping("/{templateId}/placeholders/create-new-with-registry")
+    public R<Map<String, Object>> createNewWithRegistry(
+            @PathVariable String templateId,
+            @RequestBody CompanyTemplatePlaceholderService.CreateNewWithRegistryRequest request) {
+        companyTemplateService.getById(templateId); // 校验子模板存在
+        Map<String, Object> result = placeholderService.createNewWithRegistry(templateId, request);
+        return R.ok("占位符及注册表规则已创建", result);
+    }
+
     // ========== DTO ==========
 
     @Data
@@ -866,6 +1011,25 @@ public class CompanyTemplateController {
     public static class DeletePlaceholdersRequest {
         /** 要删除的占位符名称列表 */
         private List<String> placeholderNames;
+    }
+
+    /**
+     * 就地新建企业级注册表规则并绑定请求体
+     */
+    @Data
+    public static class CreateRegistryAndBindRequest {
+        /** 企业ID（必填） */
+        private String companyId;
+        /** 展示名（可选，默认使用占位符的name） */
+        private String displayName;
+        /** 占位符类型：DATA_CELL/TABLE_CLEAR/TABLE_CLEAR_FULL/TABLE_ROW_TEMPLATE/LONG_TEXT/BVD（必填） */
+        private String phType;
+        /** 数据来源：list / bvd（必填） */
+        private String dataSource;
+        /** 来源 Sheet 名（必填） */
+        private String sheetName;
+        /** 单元格坐标，如 B1（TABLE_CLEAR 类型可为空） */
+        private String cellAddress;
     }
 
     // ========== 私有方法 ==========

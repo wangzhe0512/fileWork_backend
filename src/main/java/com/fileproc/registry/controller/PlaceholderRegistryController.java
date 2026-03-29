@@ -77,4 +77,15 @@ public class PlaceholderRegistryController {
         placeholderRegistryService.deleteEntry(id);
         return R.ok();
     }
+
+    @Operation(summary = "基于系统级条目为指定企业创建企业级覆盖条目",
+            description = "复制系统级条目，仅改 companyId/level，可传入需要覆盖的字段；同名企业级已存在时返回400")
+    @PreAuthorize("hasAuthority('registry:edit')")
+    @PostMapping("/{id}/override-for-company")
+    public R<PlaceholderRegistry> overrideForCompany(
+            @PathVariable String id,
+            @RequestParam String companyId,
+            @RequestBody(required = false) PlaceholderRegistry overrides) {
+        return R.ok(placeholderRegistryService.overrideForCompany(id, companyId, overrides));
+    }
 }

@@ -152,6 +152,57 @@ public class PlaceholderRegistryService {
         placeholderRegistryMapper.update(null, wrapper);
     }
 
+    /**
+     * 基于系统级条目，为指定企业创建企业级覆盖条目
+     * <p>
+     * 复制系统级条目的所有字段，设 level=company + companyId，只允许传入需要覆盖的字段。
+     * 若该企业已有同名企业级条目，抛出 400（调用方可提示"已有覆盖条目，请直接编辑"）。
+     * </p>
+     *
+     * @param systemEntryId 系统级条目ID
+     * @param companyId     企业ID
+     * @param overrides     需要覆盖的字段（null 表示保持原值）
+     * @return 新建的企业级覆盖条目
+     */
+    public PlaceholderRegistry overrideForCompany(String systemEntryId, String companyId,
+                                                   PlaceholderRegistry overrides) {
+        PlaceholderRegistry system = placeholderRegistryMapper.selectById(systemEntryId);
+        if (system == null) {
+            throw BizException.notFound("系统级注册表条目");
+        }
+        if (!"system".equals(system.getLevel())) {
+            throw BizException.of(400, "只能基于系统级条目创建覆盖，当前条目不是系统级");
+        }
+        if (companyId == null || companyId.trim().isEmpty()) {
+            throw BizException.of(400, "companyId 不能为空");
+        }
+
+        // 复制系统级字段，然后应用覆盖
+        PlaceholderRegistry company = new PlaceholderRegistry();
+        company.setLevel("company");
+        company.setCompanyId(companyId);
+        company.setPlaceholderName(system.getPlaceholderName()); // 保持同名（覆盖语义）
+        company.setDisplayName(overrides != null && overrides.getDisplayName() != null
+                ? overrides.getDisplayName() : system.getDisplayName());
+        company.setPhType(overrides != null && overrides.getPhType() != null
+                ? overrides.getPhType() : system.getPhType());
+        company.setDataSource(overrides != null && overrides.getDataSource() != null
+                ? overrides.getDataSource() : system.getDataSource());
+        company.setSheetName(overrides != null && overrides.getSheetName() != null
+                ? overrides.getSheetName() : system.getSheetName());
+        company.setCellAddress(overrides != null && overrides.getCellAddress() != null
+                ? overrides.getCellAddress() : system.getCellAddress());
+        company.setTitleKeywords(overrides != null && overrides.getTitleKeywords() != null
+                ? overrides.getTitleKeywords() : system.getTitleKeywords());
+        company.setColumnDefs(overrides != null && overrides.getColumnDefs() != null
+                ? overrides.getColumnDefs() : system.getColumnDefs());
+        company.setSort(system.getSort());
+        company.setEnabled(1);
+
+        // saveEntry 内部已做重复校验（同名企业级条目存在时抛 400）
+        return saveEntry(company);
+    }
+
     // ========== 内部工具 ==========
 
     /**

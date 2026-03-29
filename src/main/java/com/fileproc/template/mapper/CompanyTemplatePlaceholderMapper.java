@@ -10,6 +10,8 @@ import org.apache.ibatis.annotations.Update;
 import java.util.List;
 import java.util.Map;
 
+
+
 /**
  * 企业子模板占位符状态 Mapper
  */
@@ -112,4 +114,16 @@ public interface CompanyTemplatePlaceholderMapper extends BaseMapper<CompanyTemp
             "</script>")
     List<CompanyTemplatePlaceholder> selectByTemplateIdAndNames(@Param("templateId") String templateId,
                                                                   @Param("names") List<String> names);
+
+    /**
+     * 统计子模板中每个 placeholder_name 的记录数（即在文档中插入的数量）
+     * <p>
+     * 返回 Map 列表，每条包含 placeholder_name 和 cnt 两个字段。
+     * </p>
+     */
+    @Select("SELECT placeholder_name, COUNT(*) AS cnt " +
+            "FROM company_template_placeholder " +
+            "WHERE company_template_id = #{templateId} AND deleted = 0 " +
+            "GROUP BY placeholder_name")
+    List<Map<String, Object>> countGroupByName(@Param("templateId") String templateId);
 }

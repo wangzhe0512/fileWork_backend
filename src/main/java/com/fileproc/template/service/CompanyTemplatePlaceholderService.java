@@ -3,6 +3,8 @@ package com.fileproc.template.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fileproc.common.BizException;
 import com.fileproc.common.TenantContext;
+import com.fileproc.registry.entity.PlaceholderRegistry;
+import com.fileproc.registry.mapper.PlaceholderRegistryMapper;
 import com.fileproc.template.entity.CompanyTemplate;
 import com.fileproc.template.entity.CompanyTemplateModule;
 import com.fileproc.template.entity.CompanyTemplatePlaceholder;
@@ -39,6 +41,7 @@ public class CompanyTemplatePlaceholderService {
     private final CompanyTemplatePlaceholderMapper placeholderMapper;
     private final CompanyTemplateModuleMapper moduleMapper;
     private final CompanyTemplateMapper companyTemplateMapper;
+    private final PlaceholderRegistryMapper placeholderRegistryMapper;
 
     /**
      * 初始化子模板的占位符状态
@@ -390,6 +393,219 @@ public class CompanyTemplatePlaceholderService {
         }
     }
 
+    // ========== 新增方法：绑定状态 ==========
+
+    /**
+     * 查询子模板全量占位符，每条附带绑定状态（bound/unbound）、positionCount、registryLevel
+     * <p>
+     * - positionCount：该占位符在文档中出现的总次数（同 templateId 下同名记录数）
+     * - registryLevel：关联注册表的级别（system/company/custom，查不到则为 custom）
+     * - bindingStatus：sourceSheet 和 sourceField 同时不为空则为 bound
+     * </p>
+     *
+     * @param templateId 子模板ID
+     * @param companyId  企业ID（用于查注册表级别，可为 null）
+     * @return 带绑定状态的占位符列表
+     */
+    public List<PlaceholderBindingVO> listWithBindingStatus(String templateId, String companyId) {
+        List<CompanyTemplatePlaceholder> list = placeholderMapper.selectByTemplateId(templateId);
+
+        // 统计每个 placeholderName 的出现次数
+        List<Map<String, Object>> countRows = placeholderMapper.countGroupByName(templateId);
+        Map<String, Integer> countMap = new HashMap<>();
+        for (Map<String, Object> row : countRows) {
+            String name = (String) row.get("placeholder_name");
+            Object cntObj = row.get("cnt");
+            int cnt = cntObj instanceof Number ? ((Number) cntObj).intValue() : 0;
+            countMap.put(name, cnt);
+        }
+
+        // 查注册表级别（每个 placeholderName 查一次，结果缓存）
+        Map<String, String> levelCache = new HashMap<>();
+
+        return list.stream().map(ph -> {
+            String bindingStatus = (ph.getSourceSheet() != null && !ph.getSourceSheet().isBlank()
+                    && ph.getSourceField() != null && !ph.getSourceField().isBlank())
+                    ? "bound" : "unbound";
+
+            int positionCount = countMap.getOrDefault(ph.getPlaceholderName(), 1);
+
+            String registryLevel = levelCache.computeIfAbsent(ph.getPlaceholderName(), name -> {
+                try {
+                    PlaceholderRegistry reg = placeholderRegistryMapper.selectEffectiveByName(
+                            name, companyId != null ? companyId : "");
+                    return reg != null ? reg.getLevel() : "custom";
+                } catch (Exception e) {
+                    return "custom";
+                }
+            });
+
+            return new PlaceholderBindingVO(ph, bindingStatus, positionCount, registryLevel);
+        }).collect(Collectors.toList());
+    }
+
+    /**
+     * 兼容旧接口（不传 companyId，registryLevel 全部返回 custom）
+     *
+     * @deprecated 建议使用 {@link #listWithBindingStatus(String, String)}
+     */
+    @Deprecated
+    public List<PlaceholderBindingVO> listWithBindingStatus(String templateId) {
+        return listWithBindingStatus(templateId, null);
+    }
+
+    /**
+     * 专用绑定/解绑方法：仅更新 sourceSheet 和 sourceField 两个字段
+     * <p>
+     * 解绑时两个字段均传 null 即可
+     * </p>
+     *
+     * @param phId        占位符ID
+     * @param templateId  子模板ID（用于归属校验）
+     * @param sourceSheet 来源Sheet（null 表示清空）
+     * @param sourceField 来源字段（null 表示清空）
+     * @return 更新后的占位符记录
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public CompanyTemplatePlaceholder updateBinding(String phId, String templateId,
+                                                     String sourceSheet, String sourceField) {
+        CompanyTemplatePlaceholder ph = placeholderMapper.selectById(phId);
+        if (ph == null) throw BizException.notFound("占位符");
+        if (!templateId.equals(ph.getCompanyTemplateId())) {
+            throw BizException.forbidden("该占位符不属于指定子模板");
+        }
+
+        // 允许显式传 null 清空（解绑）
+        ph.setSourceSheet(sourceSheet);
+        ph.setSourceField(sourceField);
+        ph.setUpdatedAt(LocalDateTime.now());
+        placeholderMapper.updateById(ph);
+
+        log.info("[CompanyTemplatePlaceholderService] 占位符绑定已更新: id={}, sourceSheet={}, sourceField={}",
+                phId, sourceSheet, sourceField);
+        return ph;
+    }
+
+    /**
+     * 从占位符库（注册表）中选已有规则，添加到指定子模板
+     * <p>
+     * 步骤：
+     * 1. 查询注册表条目是否存在
+     * 2. 检查同一 templateId 下 placeholder_name 是否已存在（存在则抛 400）
+     * 3. 新建 company_template_placeholder 记录，sourceSheet/sourceField 从注册表复制
+     * </p>
+     *
+     * @param templateId  子模板ID
+     * @param registryId  注册表条目ID
+     * @param moduleId    所属模块ID（可为 null）
+     * @return 新建的占位符实例
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public CompanyTemplatePlaceholder addFromRegistry(String templateId, String registryId, String moduleId) {
+        // 1. 查注册表条目
+        PlaceholderRegistry reg = placeholderRegistryMapper.selectActiveById(registryId);
+        if (reg == null) throw BizException.notFound("注册表条目");
+
+        // 2. 校验重复
+        CompanyTemplatePlaceholder existing = placeholderMapper.selectByTemplateIdAndName(templateId, reg.getPlaceholderName());
+        if (existing != null) {
+            throw BizException.of(400, "该占位符已存在于当前子模板，不能重复添加：" + reg.getPlaceholderName());
+        }
+
+        // 3. 新建占位符实例
+        CompanyTemplatePlaceholder ph = new CompanyTemplatePlaceholder();
+        ph.setId(UUID.randomUUID().toString());
+        ph.setCompanyTemplateId(templateId);
+        ph.setModuleId(moduleId);
+        ph.setPlaceholderName(reg.getPlaceholderName());
+        ph.setName(reg.getDisplayName() != null ? reg.getDisplayName() : reg.getPlaceholderName());
+        ph.setType(mapPhType(reg.getPhType()));
+        ph.setDataSource(reg.getDataSource());
+        ph.setSourceSheet(reg.getSheetName());
+        ph.setSourceField(reg.getCellAddress());
+        ph.setStatus("confirmed");
+        ph.setCreatedAt(LocalDateTime.now());
+        ph.setUpdatedAt(LocalDateTime.now());
+        placeholderMapper.insert(ph);
+
+        log.info("[CompanyTemplatePlaceholderService] 从注册表添加占位符: templateId={}, registryId={}, name={}",
+                templateId, registryId, reg.getPlaceholderName());
+        return ph;
+    }
+
+    /**
+     * 全新新建：同时创建企业级注册表规则 + 子模板占位符实例
+     * <p>
+     * 与 createRegistryAndBind 的区别：本方法不依赖已存在的占位符记录，
+     * 直接从零创建一条注册表规则和一条占位符实例。
+     * </p>
+     *
+     * @param templateId 子模板ID
+     * @param request    新建请求
+     * @return 新建的注册表条目 + 占位符实例
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Map<String, Object> createNewWithRegistry(String templateId, CreateNewWithRegistryRequest request) {
+        // 1. 校验占位符名称在该子模板下不重复
+        CompanyTemplatePlaceholder existing = placeholderMapper.selectByTemplateIdAndName(templateId, request.placeholderName());
+        if (existing != null) {
+            throw BizException.of(400, "该占位符已存在于当前子模板，不能重复添加：" + request.placeholderName());
+        }
+
+        // 2. 构造企业级注册表条目
+        PlaceholderRegistry entry = new PlaceholderRegistry();
+        entry.setLevel("company");
+        entry.setCompanyId(request.companyId());
+        entry.setPlaceholderName(request.placeholderName());
+        entry.setDisplayName(request.displayName() != null ? request.displayName() : request.placeholderName());
+        entry.setPhType(request.phType());
+        entry.setDataSource(request.dataSource());
+        entry.setSheetName(request.sheetName());
+        entry.setCellAddress(request.cellAddress());
+        entry.setEnabled(1);
+
+        // 3. 保存注册表条目（内部已做重复校验）
+        entry.setId(null);
+        entry.setTenantId(TenantContext.getTenantId());
+        entry.setCreatedAt(LocalDateTime.now());
+        entry.setUpdatedAt(LocalDateTime.now());
+        entry.setDeleted(0);
+        placeholderRegistryMapper.insert(entry);
+
+        // 4. 新建占位符实例
+        CompanyTemplatePlaceholder ph = new CompanyTemplatePlaceholder();
+        ph.setId(UUID.randomUUID().toString());
+        ph.setCompanyTemplateId(templateId);
+        ph.setModuleId(request.moduleId());
+        ph.setPlaceholderName(request.placeholderName());
+        ph.setName(entry.getDisplayName());
+        ph.setType(mapPhType(request.phType()));
+        ph.setDataSource(request.dataSource());
+        ph.setSourceSheet(request.sheetName());
+        ph.setSourceField(request.cellAddress());
+        ph.setStatus("confirmed");
+        ph.setCreatedAt(LocalDateTime.now());
+        ph.setUpdatedAt(LocalDateTime.now());
+        placeholderMapper.insert(ph);
+
+        log.info("[CompanyTemplatePlaceholderService] 新建占位符+注册表规则: templateId={}, name={}",
+                templateId, request.placeholderName());
+        return Map.of("registryEntry", entry, "placeholder", ph);
+    }
+
+    /**
+     * 将注册表 phType 映射为子模板占位符 type 字段
+     */
+    private String mapPhType(String phType) {
+        if (phType == null) return "text";
+        return switch (phType) {
+            case "TABLE_CLEAR", "TABLE_CLEAR_FULL", "TABLE_ROW_TEMPLATE" -> "table";
+            case "LONG_TEXT" -> "text";
+            case "BVD" -> "text";
+            default -> "text";
+        };
+    }
+
     // ========== DTO ==========
 
     /**
@@ -404,6 +620,97 @@ public class CompanyTemplatePlaceholderService {
             String description,
             Integer sort
     ) {}
+
+    /**
+     * 占位符绑定请求
+     */
+    public record BindingRequest(
+            String sourceSheet,
+            String sourceField
+    ) {}
+
+    /**
+     * 从注册表添加请求（指定注册表条目ID）
+     */
+    public record AddFromRegistryRequest(
+            /** 注册表条目ID（必填） */
+            String registryId,
+            /** 所属模块ID（可为 null） */
+            String moduleId
+    ) {}
+
+    /**
+     * 全新新建占位符请求（创建注册表规则 + 占位符实例）
+     */
+    public record CreateNewWithRegistryRequest(
+            /** 企业ID（必填） */
+            String companyId,
+            /** 占位符标准名，如 ${myField}（必填） */
+            String placeholderName,
+            /** 展示名（可选，默认等于 placeholderName） */
+            String displayName,
+            /** 占位符类型：DATA_CELL/TABLE_CLEAR/...（必填） */
+            String phType,
+            /** 数据来源：list / bvd（必填） */
+            String dataSource,
+            /** 来源 Sheet 名（必填） */
+            String sheetName,
+            /** 单元格坐标，如 B1（TABLE_CLEAR 类型可为空） */
+            String cellAddress,
+            /** 所属模块ID（可为 null） */
+            String moduleId
+    ) {}
+
+    /**
+     * 占位符绑定状态 VO
+     * <p>
+     * 扩展 CompanyTemplatePlaceholder，追加以下字段：
+     * - bindingStatus：bound / unbound
+     * - positionCount：该占位符在文档中插入的总次数
+     * - registryLevel：system / company / custom（查不到注册表时为 custom）
+     * </p>
+     */
+    public static class PlaceholderBindingVO extends CompanyTemplatePlaceholder {
+        private final String bindingStatus;
+        private final int positionCount;
+        private final String registryLevel;
+
+        public PlaceholderBindingVO(CompanyTemplatePlaceholder ph, String bindingStatus,
+                                    int positionCount, String registryLevel) {
+            this.setId(ph.getId());
+            this.setCompanyTemplateId(ph.getCompanyTemplateId());
+            this.setModuleId(ph.getModuleId());
+            this.setName(ph.getName());
+            this.setType(ph.getType());
+            this.setDataSource(ph.getDataSource());
+            this.setSourceSheet(ph.getSourceSheet());
+            this.setSourceField(ph.getSourceField());
+            this.setDescription(ph.getDescription());
+            this.setSort(ph.getSort());
+            this.setPlaceholderName(ph.getPlaceholderName());
+            this.setStatus(ph.getStatus());
+            this.setConfirmedType(ph.getConfirmedType());
+            this.setPositionJson(ph.getPositionJson());
+            this.setExpectedValue(ph.getExpectedValue());
+            this.setActualValue(ph.getActualValue());
+            this.setReason(ph.getReason());
+            this.setConfidence(ph.getConfidence());
+            this.setCreatedAt(ph.getCreatedAt());
+            this.setUpdatedAt(ph.getUpdatedAt());
+            this.bindingStatus = bindingStatus;
+            this.positionCount = positionCount;
+            this.registryLevel = registryLevel;
+        }
+
+        /** 兼容旧构造（positionCount=1, registryLevel=custom） */
+        public PlaceholderBindingVO(CompanyTemplatePlaceholder ph, String bindingStatus) {
+            this(ph, bindingStatus, 1, "custom");
+        }
+
+        public String getBindingStatus() { return bindingStatus; }
+        public int getPositionCount() { return positionCount; }
+        public String getRegistryLevel() { return registryLevel; }
+    }
 
     /**
      * 同步结果
