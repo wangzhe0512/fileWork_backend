@@ -30,7 +30,7 @@ public class PlaceholderRegistryController {
 
     private final PlaceholderRegistryService placeholderRegistryService;
 
-    @Operation(summary = "查询注册表条目（level=system 或 level=company&companyId=xxx）")
+    @Operation(summary = "查询注册表条目（level=system | company | all，all 时返回系统级+企业级合并列表）")
     @PreAuthorize("hasAuthority('registry:list')")
     @GetMapping
     public R<List<PlaceholderRegistry>> list(
@@ -38,6 +38,13 @@ public class PlaceholderRegistryController {
             @RequestParam(required = false) String companyId) {
         if ("system".equals(level)) {
             return R.ok(placeholderRegistryService.listSystemEntries());
+        } else if ("all".equals(level)) {
+            // 全部：系统级 + 企业级（如果传了 companyId 则包含企业级，否则仅系统级）
+            List<PlaceholderRegistry> result = new java.util.ArrayList<>(placeholderRegistryService.listSystemEntries());
+            if (companyId != null && !companyId.trim().isEmpty()) {
+                result.addAll(placeholderRegistryService.listCompanyEntries(companyId));
+            }
+            return R.ok(result);
         } else {
             if (companyId == null || companyId.trim().isEmpty()) {
                 return R.fail(400, "查询企业级规则时 companyId 不能为空");

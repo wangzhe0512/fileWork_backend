@@ -431,6 +431,16 @@ public class CompanyTemplatePlaceholderService {
                             && ph.getSourceField() != null && !ph.getSourceField().isBlank());
             String bindingStatus = isBound ? "bound" : "unbound";
 
+            // status（确认状态）：有 confirmed 则为 confirmed，否则有 ignored 则为 ignored，否则为 uncertain
+            String status = positions.stream()
+                    .map(CompanyTemplatePlaceholder::getStatus)
+                    .filter(s -> s != null && !s.isBlank())
+                    .reduce("uncertain", (a, b) -> {
+                        if ("confirmed".equals(a) || "confirmed".equals(b)) return "confirmed";
+                        if ("ignored".equals(a) || "ignored".equals(b)) return "ignored";
+                        return "uncertain";
+                    });
+
             // registryLevel
             String registryLevel = levelCache.computeIfAbsent(placeholderName, name -> {
                 try {
@@ -455,6 +465,7 @@ public class CompanyTemplatePlaceholderService {
                     first.getDescription(),
                     first.getSort(),
                     bindingStatus,
+                    status,
                     positionCount,
                     registryLevel,
                     positions
@@ -692,6 +703,8 @@ public class CompanyTemplatePlaceholderService {
         private final String description;
         private final Integer sort;
         private final String bindingStatus;
+        /** 确认状态：confirmed(已确认) / uncertain(待确认) / ignored(忽略) */
+        private final String status;
         private final int positionCount;
         private final String registryLevel;
         private final List<CompanyTemplatePlaceholder> positions;
@@ -700,7 +713,8 @@ public class CompanyTemplatePlaceholderService {
                                    String placeholderName, String name, String type,
                                    String dataSource, String sourceSheet, String sourceField,
                                    String description, Integer sort,
-                                   String bindingStatus, int positionCount, String registryLevel,
+                                   String bindingStatus, String status,
+                                   int positionCount, String registryLevel,
                                    List<CompanyTemplatePlaceholder> positions) {
             this.id = id;
             this.companyTemplateId = companyTemplateId;
@@ -714,6 +728,7 @@ public class CompanyTemplatePlaceholderService {
             this.description = description;
             this.sort = sort;
             this.bindingStatus = bindingStatus;
+            this.status = status;
             this.positionCount = positionCount;
             this.registryLevel = registryLevel;
             this.positions = positions;
@@ -732,6 +747,7 @@ public class CompanyTemplatePlaceholderService {
         public String getDescription() { return description; }
         public Integer getSort() { return sort; }
         public String getBindingStatus() { return bindingStatus; }
+        public String getStatus() { return status; }
         public int getPositionCount() { return positionCount; }
         public String getRegistryLevel() { return registryLevel; }
         public List<CompanyTemplatePlaceholder> getPositions() { return positions; }
