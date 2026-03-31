@@ -33,7 +33,9 @@ public class MybatisPlusConfig {
             "system_placeholder",
             // 企业子模板模块和占位符表，通过 company_template_id 关联，不直接存 tenant_id
             "company_template_module",
-            "company_template_placeholder"
+            "company_template_placeholder",
+            // 占位符注册表：系统级 tenant_id=null，企业级用 company_id 区分，不依赖租户过滤
+            "placeholder_registry"
     );
 
     @Bean
