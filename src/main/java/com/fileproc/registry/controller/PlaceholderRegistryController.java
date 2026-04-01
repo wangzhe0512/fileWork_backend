@@ -39,12 +39,20 @@ public class PlaceholderRegistryController {
         if ("system".equals(level)) {
             return R.ok(placeholderRegistryService.listSystemEntries());
         } else if ("all".equals(level)) {
-            // 全部：系统级 + 企业级（如果传了 companyId 则包含企业级，否则仅系统级）
-            List<PlaceholderRegistry> result = new java.util.ArrayList<>(placeholderRegistryService.listSystemEntries());
-            if (companyId != null && !companyId.trim().isEmpty()) {
-                result.addAll(placeholderRegistryService.listCompanyEntries(companyId));
+            // 全部：系统级 + 企业级，按 placeholderName 去重，企业级优先（覆盖语义）
+            List<PlaceholderRegistry> systemList = placeholderRegistryService.listSystemEntries();
+            List<PlaceholderRegistry> companyList = (companyId != null && !companyId.trim().isEmpty())
+                    ? placeholderRegistryService.listCompanyEntries(companyId)
+                    : java.util.Collections.emptyList();
+            // 用 LinkedHashMap 按 sort 顺序去重：先放系统级，再用企业级覆盖
+            java.util.Map<String, PlaceholderRegistry> merged = new java.util.LinkedHashMap<>();
+            for (PlaceholderRegistry e : systemList) {
+                merged.put(e.getPlaceholderName(), e);
             }
-            return R.ok(result);
+            for (PlaceholderRegistry e : companyList) {
+                merged.put(e.getPlaceholderName(), e); // 企业级覆盖同名系统级
+            }
+            return R.ok(new java.util.ArrayList<>(merged.values()));
         } else {
             if (companyId == null || companyId.trim().isEmpty()) {
                 return R.fail(400, "查询企业级规则时 companyId 不能为空");
