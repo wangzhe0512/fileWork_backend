@@ -59,8 +59,8 @@ SELECT UUID(), 'system', '清单模板-数据表-B3', '事务所名称', 'DATA_C
 SELECT UUID(), 'system', '清单模板-数据表-B4', '事务所简称', 'DATA_CELL', 'list', '数据表', 'B4', NULL, NULL, 40,  1, 0 UNION ALL
 SELECT UUID(), 'system', '清单模板-数据表-B5', '企业简称',   'DATA_CELL', 'list', '数据表', 'B5', NULL, NULL, 50,  1, 0 UNION ALL
 SELECT UUID(), 'system', '清单模板-数据表-B6', '母公司全称', 'DATA_CELL', 'list', '数据表', 'B6', NULL, NULL, 60,  1, 0 UNION ALL
-SELECT UUID(), 'system', '清单模板-数据表-B7', '集团简介',   'LONG_TEXT', 'list', '数据表', 'B7', NULL, NULL, 70,  1, 0 UNION ALL
-SELECT UUID(), 'system', '清单模板-数据表-B8', '公司概况',   'LONG_TEXT', 'list', '数据表', 'B8', NULL, NULL, 80,  1, 0 UNION ALL
+SELECT UUID(), 'system', '清单模板-数据表-B7', '集团情况描述',   'LONG_TEXT', 'list', '数据表', 'B7', NULL, NULL, 70,  1, 0 UNION ALL
+SELECT UUID(), 'system', '清单模板-数据表-B8', '公司经营背景资料',   'LONG_TEXT', 'list', '数据表', 'B8', NULL, NULL, 80,  1, 0 UNION ALL
 
 -- ===== 第二类：整表/区域占位符 =====
 -- TABLE_CLEAR_FULL（财务状况表整表展开）
