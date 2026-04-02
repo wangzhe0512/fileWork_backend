@@ -416,6 +416,12 @@ public class CompanyTemplatePlaceholderService {
 
         // 查注册表级别（缓存）
         Map<String, String> levelCache = new HashMap<>();
+        // 查注册表原始 phType（缓存，与 levelCache 共享同一次查询结果）
+        Map<String, String> phTypeCache = new HashMap<>();
+        // 查注册表条目ID（缓存，与 levelCache 共享同一次查询结果）
+        Map<String, String> registryItemIdCache = new HashMap<>();
+        // 查注册表可读展示名（缓存，与 levelCache 共享同一次查询结果）
+        Map<String, String> displayNameCache = new HashMap<>();
 
         return grouped.entrySet().stream().map(entry -> {
             String placeholderName = entry.getKey();
@@ -441,23 +447,34 @@ public class CompanyTemplatePlaceholderService {
                         return "uncertain";
                     });
 
-            // registryLevel
+            // registryLevel + phType（共享同一次注册表查询，零额外开销）
             String registryLevel = levelCache.computeIfAbsent(placeholderName, name -> {
                 try {
                     PlaceholderRegistry reg = placeholderRegistryMapper.selectEffectiveByName(
                             name, companyId != null ? companyId : "");
-                    return reg != null ? reg.getLevel() : "custom";
+                    if (reg != null) {
+                        phTypeCache.put(name, reg.getPhType());
+                        registryItemIdCache.put(name, reg.getId());
+                        displayNameCache.put(name, reg.getDisplayName());
+                        return reg.getLevel();
+                    }
+                    return "custom";
                 } catch (Exception e) {
                     return "custom";
                 }
             });
+            String phType = phTypeCache.get(placeholderName);
+            String registryItemId = registryItemIdCache.get(placeholderName);
+            String cachedDisplayName = displayNameCache.get(placeholderName);
+            String resolvedName = (cachedDisplayName != null && !cachedDisplayName.isBlank())
+                    ? cachedDisplayName : first.getName();
 
             return new PlaceholderGroupVO(
                     first.getId(),
                     first.getCompanyTemplateId(),
                     first.getModuleId(),
                     placeholderName,
-                    first.getName(),
+                    resolvedName,
                     first.getType(),
                     first.getDataSource(),
                     first.getSourceSheet(),
@@ -468,6 +485,8 @@ public class CompanyTemplatePlaceholderService {
                     status,
                     positionCount,
                     registryLevel,
+                    phType,
+                    registryItemId,
                     positions
             );
         }).collect(Collectors.toList());
@@ -707,6 +726,10 @@ public class CompanyTemplatePlaceholderService {
         private final String status;
         private final int positionCount;
         private final String registryLevel;
+        /** 注册表原始占位符类型，如 TABLE_ROW_TEMPLATE / TABLE_CLEAR / LONG_TEXT 等，查不到则为 null */
+        private final String phType;
+        /** 注册表条目主键ID，查不到则为 null */
+        private final String registryItemId;
         private final List<CompanyTemplatePlaceholder> positions;
 
         public PlaceholderGroupVO(String id, String companyTemplateId, String moduleId,
@@ -715,6 +738,8 @@ public class CompanyTemplatePlaceholderService {
                                    String description, Integer sort,
                                    String bindingStatus, String status,
                                    int positionCount, String registryLevel,
+                                   String phType,
+                                   String registryItemId,
                                    List<CompanyTemplatePlaceholder> positions) {
             this.id = id;
             this.companyTemplateId = companyTemplateId;
@@ -731,6 +756,8 @@ public class CompanyTemplatePlaceholderService {
             this.status = status;
             this.positionCount = positionCount;
             this.registryLevel = registryLevel;
+            this.phType = phType;
+            this.registryItemId = registryItemId;
             this.positions = positions;
         }
 
@@ -750,6 +777,8 @@ public class CompanyTemplatePlaceholderService {
         public String getStatus() { return status; }
         public int getPositionCount() { return positionCount; }
         public String getRegistryLevel() { return registryLevel; }
+        public String getPhType() { return phType; }
+        public String getRegistryItemId() { return registryItemId; }
         public List<CompanyTemplatePlaceholder> getPositions() { return positions; }
     }
 
