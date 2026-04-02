@@ -3,6 +3,7 @@ package com.fileproc.report.service;
 import com.alibaba.excel.EasyExcel;
 import com.fileproc.common.BizException;
 import com.fileproc.datafile.entity.DataFile;
+import com.fileproc.registry.service.PlaceholderRegistryService;
 import com.fileproc.template.entity.Placeholder;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.openxml4j.util.ZipSecureFile;
@@ -31,6 +32,12 @@ import java.util.*;
 @Slf4j
 @Component
 public class ReportGenerateEngine {
+
+    /**
+     * 占位符注册表服务（可选注入，用于获取企业级 column_defs 配置）
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private PlaceholderRegistryService placeholderRegistryService;
 
     /**
      * 执行报告生成
@@ -101,7 +108,14 @@ public class ReportGenerateEngine {
                 value = expandYearValue(ph.getName(), value);
                 textValues.put(ph.getName(), value != null ? value : "");
             } else if ("table".equals(ph.getType())) {
-                if (rowTemplateSheets.contains(ph.getSourceSheet())) {
+                if ("bvd".equals(dataSource) && "SummaryYear".equals(ph.getSourceSheet())) {
+                    // BVD SummaryYear 可比公司列表：动态行模板（按 column_defs 提取数据）
+                    List<String> colDefs = getColumnDefsForPlaceholder(ph.getName(), ph.getCompanyId());
+                    List<Map<String, Object>> rowData = extractSummaryYearRowData(rows, colDefs);
+                    rowTemplateValues.put(ph.getName(), rowData);
+                    log.info("[ReportEngine] BVD SummaryYear '{}' 行模板数据提取完成：{} 行，columnDefs={}",
+                            ph.getName(), rowData.size(), colDefs);
+                } else if (rowTemplateSheets.contains(ph.getSourceSheet())) {
                     // 行模板克隆类型：走按字段名提取路径，输出 List<Map<字段名,值>>
                     List<Map<String, Object>> rowData = extractRowTemplateData(rows, ph.getSourceSheet(), ph.getName());
                     rowTemplateValues.put(ph.getName(), rowData);
@@ -200,6 +214,23 @@ public class ReportGenerateEngine {
         if (rows == null || rows.isEmpty() || sourceField == null) return null;
 
         String field = sourceField.trim();
+
+        // 最优先：D列关键词动态定位格式，如 "D_KEYWORD:MIN"
+        // 扫描 D 列（index=3）找含关键词的行，取该行 E 列（index=4）的值
+        if (field.startsWith("D_KEYWORD:")) {
+            String keyword = field.substring("D_KEYWORD:".length()).trim().toUpperCase();
+            for (Map<Integer, Object> row : rows) {
+                Object dCell = row.get(3); // D列，index=3
+                if (dCell != null && dCell.toString().toUpperCase().contains(keyword)) {
+                    Object eCell = row.get(4); // E列，index=4
+                    if (eCell != null && !eCell.toString().isBlank()) {
+                        return eCell.toString().trim();
+                    }
+                }
+            }
+            log.warn("[ReportEngine] D列未找到含关键词 '{}' 的行（sheet={}）", keyword, sheetName);
+            return null;
+        }
 
         // 优先：Excel 单元格地址格式，如 "B1"、"C3"（字母+数字）
         if (field.matches("[A-Za-z]+\\d+")) {
@@ -1284,5 +1315,150 @@ public class ReportGenerateEngine {
             return BigDecimal.valueOf((Double) val).stripTrailingZeros().toPlainString();
         }
         return val.toString().trim();
+    }
+
+    /**
+     * 获取指定占位符的 column_defs（企业级优先，系统级兜底，最终默认 ["#","COMPANY"]）。
+     * 从 PlaceholderRegistryService 获取有效注册表，找到对应条目的 columnDefs。
+     *
+     * @param placeholderName 占位符名称
+     * @param companyId       企业ID（null 时只查系统级）
+     * @return 有效的 column_defs 列表
+     */
+    private List<String> getColumnDefsForPlaceholder(String placeholderName, String companyId) {
+        // 从注册表服务获取企业级/系统级 columnDefs
+        if (placeholderRegistryService != null) {
+            try {
+                List<com.fileproc.report.service.ReverseTemplateEngine.RegistryEntry> registry =
+                        placeholderRegistryService.getEffectiveRegistry(companyId);
+                for (com.fileproc.report.service.ReverseTemplateEngine.RegistryEntry entry : registry) {
+                    if (placeholderName.equals(entry.getPlaceholderName())
+                            && entry.getColumnDefs() != null
+                            && !entry.getColumnDefs().isEmpty()) {
+                        log.debug("[ReportEngine] 占位符 '{}' columnDefs 来自注册表: {}", placeholderName, entry.getColumnDefs());
+                        return entry.getColumnDefs();
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[ReportEngine] 读取注册表 columnDefs 失败，使用默认值: {}", e.getMessage());
+            }
+        }
+        // 兜底：系统默认只填 # 和 COMPANY
+        return List.of("#", "COMPANY");
+    }
+
+    /**
+     * 从 SummaryYear sheet 按 columnDefs 动态提取可比公司数据行。
+     * <p>
+     * 规则：
+     * <ul>
+     *   <li>跳过 row[0]（表头行）</li>
+     *   <li>遍历到 D列（index=3）含 MIN/LQ/MED/UQ/MAX 任一关键词行时停止</li>
+     *   <li>过滤 B列（index=1）为空的完全空行</li>
+     *   <li>按 columnDefs 中 fieldKey→colIndex 映射（依据 BVD_COLUMN_KEYWORD_MAP 反查）提取数据</li>
+     * </ul>
+     * </p>
+     *
+     * @param rows       SummaryYear sheet 全部行数据（EasyExcel 读取，无表头模式）
+     * @param columnDefs 需要提取的字段名列表，如 ["#","COMPANY","NCP_CURRENT"]
+     * @return 数据行列表，每行为字段名→值的 Map，含 _rowType=data
+     */
+    private List<Map<String, Object>> extractSummaryYearRowData(
+            List<Map<Integer, Object>> rows, List<String> columnDefs) {
+
+        if (rows == null || rows.isEmpty()) return Collections.emptyList();
+        if (columnDefs == null || columnDefs.isEmpty()) {
+            columnDefs = List.of("#", "COMPANY");
+        }
+
+        // 构建 fieldKey → 列索引 映射，依据 SummaryYear 表头行（row[0]）动态解析
+        // 如果表头行能匹配 BVD_COLUMN_KEYWORD_MAP，使用动态列索引；否则使用内置默认索引
+        Map<String, Integer> fieldToColIndex = buildSummaryYearFieldColMap(rows.get(0));
+        log.debug("[ReportEngine-SummaryYear] fieldKey→colIndex映射: {}", fieldToColIndex);
+
+        // 五分位关键词（D列出现这些关键词时停止读取）
+        final Set<String> STOP_KEYWORDS = Set.of("MIN", "LQ", "MED", "UQ", "MAX");
+
+        List<Map<String, Object>> result = new ArrayList<>();
+
+        for (int i = 1; i < rows.size(); i++) { // 跳过第0行表头
+            Map<Integer, Object> row = rows.get(i);
+
+            // D列（index=3）含停止关键词时结束
+            Object dCell = row.get(3);
+            if (dCell != null) {
+                String dStr = dCell.toString().trim().toUpperCase();
+                if (STOP_KEYWORDS.stream().anyMatch(dStr::contains)) {
+                    log.debug("[ReportEngine-SummaryYear] 在行{}遇到停止关键词 '{}'，结束读取", i, dStr);
+                    break;
+                }
+            }
+
+            // 过滤 B列（index=1）为空的完全空行
+            Object bCell = row.get(1);
+            if (bCell == null || bCell.toString().trim().isEmpty()) continue;
+
+            // 按 columnDefs 提取字段值
+            Map<String, Object> rowMap = new LinkedHashMap<>();
+            for (String fieldKey : columnDefs) {
+                if (fieldKey == null) continue; // inferredColDefs 中可能有 null 占位
+                Integer colIdx = fieldToColIndex.get(fieldKey);
+                if (colIdx != null) {
+                    Object val = row.get(colIdx);
+                    rowMap.put(fieldKey, toPlainString(val));
+                } else {
+                    rowMap.put(fieldKey, "");
+                }
+            }
+            rowMap.put("_rowType", "data");
+            result.add(rowMap);
+        }
+
+        log.debug("[ReportEngine-SummaryYear] 提取完成，共 {} 行可比公司数据", result.size());
+        return result;
+    }
+
+    /**
+     * 解析 SummaryYear 表头行（row[0]），按 BVD_COLUMN_KEYWORD_MAP 构建 fieldKey→列索引 映射。
+     * 若表头行无法识别，则返回内置默认映射（#→0, COMPANY→1, FY2023_STATUS→2 等）。
+     */
+    private Map<String, Integer> buildSummaryYearFieldColMap(Map<Integer, Object> headerRow) {
+        // 尝试动态解析
+        Map<String, Integer> result = new LinkedHashMap<>();
+        boolean anyMatched = false;
+
+        if (headerRow != null) {
+            for (Map.Entry<Integer, Object> entry : headerRow.entrySet()) {
+                int colIdx = entry.getKey();
+                Object cellVal = entry.getValue();
+                if (cellVal == null) continue;
+                String lower = cellVal.toString().trim().toLowerCase();
+                for (Map.Entry<String, String> kv : ReverseTemplateEngine.BVD_COLUMN_KEYWORD_MAP.entrySet()) {
+                    if (lower.contains(kv.getKey())) {
+                        result.put(kv.getValue(), colIdx);
+                        anyMatched = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!anyMatched) {
+            // 内置默认映射（基于已知 SummaryYear 表结构）
+            result.put("#",             0);
+            result.put("COMPANY",       1);
+            result.put("FY2023_STATUS", 2);
+            result.put("FY2022_STATUS", 3);
+            result.put("NCP_CURRENT",   4);
+            result.put("NCP_PRIOR",     5);
+            result.put("Remarks",       6);
+            result.put("Sales",         7);
+            result.put("CoGS",          8);
+            result.put("SGA",           9);
+            result.put("Depreciation",  10);
+            result.put("OP",            11);
+            log.debug("[ReportEngine-SummaryYear] 表头识别失败，使用内置默认列索引映射");
+        }
+        return result;
     }
 }

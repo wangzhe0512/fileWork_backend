@@ -8,6 +8,7 @@ import com.fileproc.common.TenantContext;
 import com.fileproc.registry.entity.PlaceholderRegistry;
 import com.fileproc.registry.mapper.PlaceholderRegistryMapper;
 import com.fileproc.report.service.ReverseTemplateEngine;
+import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -284,4 +285,147 @@ public class PlaceholderRegistryService {
             throw BizException.of(400, "占位符名称已存在: " + entry.getPlaceholderName());
         }
     }
+
+    // ========== 方案C：BVD 列选择接口 ==========
+
+    /**
+     * 构建 BVD sheet 的可选列定义列表（前端列选择器数据源）。
+     * <p>
+     * 基于 {@link ReverseTemplateEngine#BVD_COLUMN_KEYWORD_MAP} 的已知字段和内置默认列索引，
+     * 返回指定 sheet 所有可选列的元数据。
+     * 系统默认选中列由系统级 column_defs 决定。
+     * </p>
+     *
+     * @param sheetName BVD sheet 名，目前支持 "SummaryYear"
+     * @param companyId 企业ID（用于获取企业级默认选中列；null 时使用系统级）
+     * @return 可选列定义列表
+     */
+    public List<BvdColumnDef> buildBvdColumnDefs(String sheetName, String companyId) {
+        if (!"SummaryYear".equals(sheetName)) {
+            // 目前只支持 SummaryYear，后续可扩展
+            return Collections.emptyList();
+        }
+
+        // 获取当前有效 column_defs（企业级优先，系统级兜底）
+        List<String> effectiveColDefs = List.of("#", "COMPANY"); // 系统默认
+        try {
+            List<ReverseTemplateEngine.RegistryEntry> registry = getEffectiveRegistry(companyId);
+            for (ReverseTemplateEngine.RegistryEntry entry : registry) {
+                if ("BVD数据模板-SummaryYear-第一张表格".equals(entry.getPlaceholderName())
+                        && entry.getColumnDefs() != null && !entry.getColumnDefs().isEmpty()) {
+                    effectiveColDefs = entry.getColumnDefs();
+                    break;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[RegistryService] 读取 SummaryYear column_defs 失败，使用默认: {}", e.getMessage());
+        }
+
+        // 构建标准列定义（基于内置已知列顺序）
+        // fieldKey, label（Excel列头）, colIndex（0-based）
+        String[][] knownCols = {
+                {"#",             "#",              "0"},
+                {"COMPANY",       "COMPANY",        "1"},
+                {"FY2023_STATUS", "FY2023 Status",  "2"},
+                {"FY2022_STATUS", "FY2022 Status",  "3"},
+                {"NCP_CURRENT",   "2020-2022 NCP",  "4"},
+                {"NCP_PRIOR",     "2019-2021 NCP",  "5"},
+                {"Remarks",       "Remarks",        "6"},
+                {"Sales",         "Sales",          "7"},
+                {"CoGS",          "CoGS",           "8"},
+                {"SGA",           "SG&A",           "9"},
+                {"Depreciation",  "Depreciation",   "10"},
+                {"OP",            "OP",             "11"},
+        };
+
+        final List<String> finalEffectiveColDefs = effectiveColDefs;
+        List<BvdColumnDef> result = new ArrayList<>();
+        for (String[] col : knownCols) {
+            BvdColumnDef def = new BvdColumnDef();
+            def.setFieldKey(col[0]);
+            def.setLabel(col[1]);
+            def.setColIndex(Integer.parseInt(col[2]));
+            def.setDefaultSelected(finalEffectiveColDefs.contains(col[0]));
+            result.add(def);
+        }
+        return result;
+    }
+
+    /**
+     * 保存企业级自定义 column_defs（方案C：前端勾选列后回调）。
+     * <p>
+     * 逻辑：
+     * <ol>
+     *   <li>若该企业已有同名企业级条目，直接更新 column_defs 字段</li>
+     *   <li>否则，先基于系统级条目创建企业级覆盖条目（{@link #overrideForCompany}），再更新 column_defs</li>
+     * </ol>
+     * </p>
+     *
+     * @param systemRegistryId 系统级注册表条目ID
+     * @param companyId        企业ID
+     * @param columnDefs       自定义列字段名列表
+     * @return 更新后的注册表条目
+     */
+    public PlaceholderRegistry updateColumnDefs(String systemRegistryId, String companyId,
+                                                 List<String> columnDefs) {
+        if (columnDefs == null || columnDefs.isEmpty()) {
+            throw BizException.of(400, "columnDefs 不能为空");
+        }
+
+        // 查询系统级条目（用于获取 placeholderName）
+        PlaceholderRegistry system = placeholderRegistryMapper.selectById(systemRegistryId);
+        if (system == null) {
+            throw BizException.notFound("系统级注册表条目");
+        }
+
+        // 序列化 columnDefs 为 JSON
+        String columnDefsJson;
+        try {
+            columnDefsJson = objectMapper.writeValueAsString(columnDefs);
+        } catch (Exception e) {
+            throw BizException.of(400, "columnDefs 序列化失败: " + e.getMessage());
+        }
+
+        // 查找是否已有企业级条目
+        PlaceholderRegistry companyEntry = placeholderRegistryMapper
+                .selectCompanyByName(companyId, system.getPlaceholderName());
+
+        if (companyEntry != null) {
+            // 已有企业级条目：直接更新 column_defs
+            LambdaUpdateWrapper<PlaceholderRegistry> wrapper = new LambdaUpdateWrapper<>();
+            wrapper.eq(PlaceholderRegistry::getId, companyEntry.getId())
+                    .set(PlaceholderRegistry::getColumnDefs, columnDefsJson)
+                    .set(PlaceholderRegistry::getUpdatedAt, java.time.LocalDateTime.now());
+            placeholderRegistryMapper.update(null, wrapper);
+            log.info("[RegistryService] 企业级 column_defs 已更新：companyId={}, name={}, defs={}",
+                    companyId, system.getPlaceholderName(), columnDefsJson);
+            return placeholderRegistryMapper.selectById(companyEntry.getId());
+        } else {
+            // 无企业级条目：先 override，再更新 column_defs
+            PlaceholderRegistry overrides = new PlaceholderRegistry();
+            overrides.setColumnDefs(columnDefsJson);
+            PlaceholderRegistry created = overrideForCompany(systemRegistryId, companyId, overrides);
+            log.info("[RegistryService] 企业级覆盖条目已创建并更新 column_defs：companyId={}, name={}, defs={}",
+                    companyId, system.getPlaceholderName(), columnDefsJson);
+            return created;
+        }
+    }
+
+    // ========== 内部 DTO ==========
+
+    /**
+     * BVD 可选列定义（前端列选择接口返回类型）
+     */
+    @Data
+    public static class BvdColumnDef {
+        /** 字段键（对应 column_defs 数组元素），如 "NCP_CURRENT" */
+        private String fieldKey;
+        /** Excel 原始列头文字，如 "2020-2022 NCP" */
+        private String label;
+        /** Excel 列索引（0-based） */
+        private int colIndex;
+        /** 是否默认选中（系统级 column_defs 中包含的列） */
+        private boolean defaultSelected;
+    }
 }
+

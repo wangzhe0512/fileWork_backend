@@ -264,17 +264,70 @@ public class ReverseTemplateEngine {
         reg.add(new RegistryEntry("BVD数据模板-数据表-B2",                "BVD-上四分位值",      PlaceholderType.BVD, "bvd", "数据表", "B2"));
         reg.add(new RegistryEntry("BVD数据模板-数据表-B3",                "BVD-中位值",          PlaceholderType.BVD, "bvd", "数据表", "B3"));
         reg.add(new RegistryEntry("BVD数据模板-数据表-B4",                "BVD-下四分位值",      PlaceholderType.BVD, "bvd", "数据表", "B4"));
-        reg.add(new RegistryEntry("BVD数据模板-AP_YEAR",                 "BVD-AP年度",        PlaceholderType.BVD, "bvd", "AP",     "A1"));
-        reg.add(new RegistryEntry("BVD数据模板-AP_Lead_Sheet_YEAR-13-19", "BVD-AP Lead 13~19行", PlaceholderType.BVD, "bvd", "AP Lead Sheet", "A13"));
-        reg.add(new RegistryEntry("BVD数据模板-SummaryYear-第一张表格",   "BVD-SummaryYear表1",    PlaceholderType.BVD, "bvd", "SummaryYear", "A1"));
-        // SummaryYear 第二张统计区（行13-18）：报告年度（E列）的五分位数值
-        reg.add(new RegistryEntry("BVD数据模板-SummaryYear-MIN",          "BVD-SummaryYear最低值", PlaceholderType.BVD, "bvd", "SummaryYear", "E14"));
-        reg.add(new RegistryEntry("BVD数据模板-SummaryYear-LQ",           "BVD-SummaryYear下四分位", PlaceholderType.BVD, "bvd", "SummaryYear", "E15"));
-        reg.add(new RegistryEntry("BVD数据模板-SummaryYear-MED",          "BVD-SummaryYear中位值", PlaceholderType.BVD, "bvd", "SummaryYear", "E16"));
-        reg.add(new RegistryEntry("BVD数据模板-SummaryYear-UQ",           "BVD-SummaryYear上四分位", PlaceholderType.BVD, "bvd", "SummaryYear", "E17"));
-        reg.add(new RegistryEntry("BVD数据模板-SummaryYear-MAX",          "BVD-SummaryYear最高值", PlaceholderType.BVD, "bvd", "SummaryYear", "E18"));
+        reg.add(new RegistryEntry("BVD数据模板-AP_YEAR",                 "BVD-AP年度",        PlaceholderType.BVD, "bvd", "AP YEAR",          "A1"));
+        reg.add(new RegistryEntry("BVD数据模板-AP_Lead_Sheet_YEAR-13-19", "BVD-AP Lead 13~19行", PlaceholderType.BVD, "bvd", "AP Lead Sheet YEAR", "A13"));
+        reg.add(new RegistryEntry("BVD数据模板-SummaryYear-第一张表格",   "BVD-SummaryYear可比公司列表",
+                PlaceholderType.TABLE_ROW_TEMPLATE, "bvd", "SummaryYear", null,
+                List.of("可比公司列表", "可比公司", "Comparable Companies", "Comparable Company"),
+                List.of("#", "COMPANY")));
+        // SummaryYear 第二张统计区：五分位数值，行号因企业可比公司数量不同而动态变化
+        // 使用 D_KEYWORD:xxx 格式动态扫描 D 列关键词定位行，取 E 列值
+        reg.add(new RegistryEntry("BVD数据模板-SummaryYear-MIN",          "BVD-SummaryYear最低值", PlaceholderType.BVD, "bvd", "SummaryYear", "D_KEYWORD:MIN"));
+        reg.add(new RegistryEntry("BVD数据模板-SummaryYear-LQ",           "BVD-SummaryYear下四分位", PlaceholderType.BVD, "bvd", "SummaryYear", "D_KEYWORD:LQ"));
+        reg.add(new RegistryEntry("BVD数据模板-SummaryYear-MED",          "BVD-SummaryYear中位值", PlaceholderType.BVD, "bvd", "SummaryYear", "D_KEYWORD:MED"));
+        reg.add(new RegistryEntry("BVD数据模板-SummaryYear-UQ",           "BVD-SummaryYear上四分位", PlaceholderType.BVD, "bvd", "SummaryYear", "D_KEYWORD:UQ"));
+        reg.add(new RegistryEntry("BVD数据模板-SummaryYear-MAX",          "BVD-SummaryYear最高值", PlaceholderType.BVD, "bvd", "SummaryYear", "D_KEYWORD:MAX"));
 
         PLACEHOLDER_REGISTRY = Collections.unmodifiableList(reg);
+    }
+
+    /**
+     * BVD SummaryYear 表列头关键词 → fieldKey 映射表。
+     * Key：Word 表格列头中可能出现的关键词（英文/中文变体，支持 contains 匹配），全部小写。
+     * Value：fieldKey（对应 column_defs 数组元素，与 Excel 列头或字段名对应）。
+     * 优先级由遍历顺序决定（前面的先匹配）。
+     */
+    static final Map<String, String> BVD_COLUMN_KEYWORD_MAP;
+    static {
+        // 使用 LinkedHashMap 保证顺序（匹配优先级）
+        Map<String, String> m = new LinkedHashMap<>();
+        // 序号列
+        m.put("#",             "#");
+        m.put("序号",          "#");
+        m.put("no.",           "#");
+        // 公司名称列
+        m.put("company",       "COMPANY");
+        m.put("公司",          "COMPANY");
+        // FY2023状态
+        m.put("fy2023",        "FY2023_STATUS");
+        m.put("当年状态",      "FY2023_STATUS");
+        m.put("2023 status",   "FY2023_STATUS");
+        // FY2022状态
+        m.put("fy2022",        "FY2022_STATUS");
+        m.put("上年状态",      "FY2022_STATUS");
+        m.put("2022 status",   "FY2022_STATUS");
+        // NCP当期
+        m.put("2020-2022 ncp", "NCP_CURRENT");
+        m.put("2020-2022",     "NCP_CURRENT");
+        m.put("当期ncp",       "NCP_CURRENT");
+        // NCP前期
+        m.put("2019-2021 ncp", "NCP_PRIOR");
+        m.put("2019-2021",     "NCP_PRIOR");
+        m.put("前期ncp",       "NCP_PRIOR");
+        // 备注
+        m.put("remarks",       "Remarks");
+        m.put("备注",          "Remarks");
+        // 财务科目
+        m.put("sales",         "Sales");
+        m.put("销售",          "Sales");
+        m.put("cogs",          "CoGS");
+        m.put("sg&a",          "SGA");
+        m.put("sga",           "SGA");
+        m.put("depreciation",  "Depreciation");
+        m.put("折旧",          "Depreciation");
+        m.put(" op",           "OP");
+        m.put("营业利润",      "OP");
+        BVD_COLUMN_KEYWORD_MAP = Collections.unmodifiableMap(m);
     }
 
     // ========== 公共 DTO ==========
@@ -896,8 +949,30 @@ public class ReverseTemplateEngine {
         List<ExcelEntry> result = new ArrayList<>();
         Map<String, List<Map<Integer, Object>>> sheetCache = new LinkedHashMap<>();
 
+        // 收集 TABLE_ROW_TEMPLATE 类型的 BVD 条目（需单独处理，不读坐标值）
+        List<ExcelEntry> bvdTableRowEntries = new ArrayList<>();
+
         for (RegistryEntry reg : registry) {
             if (!"bvd".equals(reg.getDataSource())) continue;
+
+            // TABLE_ROW_TEMPLATE 类型：生成纯元数据条目（无 cellAddress），加入 bvdTableRowEntries
+            if (reg.getType() == PlaceholderType.TABLE_ROW_TEMPLATE) {
+                ExcelEntry entry = new ExcelEntry();
+                entry.setPlaceholderName(reg.getPlaceholderName());
+                entry.setDisplayName(reg.getDisplayName());
+                entry.setDataSource("bvd");
+                entry.setSourceSheet(reg.getSheetName());
+                entry.setSourceField(null);
+                entry.setLongText(false);
+                entry.setPlaceholderType(PlaceholderType.TABLE_ROW_TEMPLATE);
+                entry.setTitleKeywords(reg.getTitleKeywords());
+                entry.setColumnDefs(reg.getColumnDefs() != null ? reg.getColumnDefs()
+                        : List.of("#", "COMPANY"));
+                bvdTableRowEntries.add(entry);
+                log.debug("[ReverseEngine-BVD] TABLE_ROW_TEMPLATE 条目已加入：占位符='{}'", reg.getPlaceholderName());
+                continue;
+            }
+
             if (reg.getSheetName() == null || reg.getCellAddress() == null) continue;
 
             List<Map<Integer, Object>> rows = getSheetRowsWithFallback(bvdExcelPath, reg.getSheetName(), sheetCache);
@@ -926,7 +1001,11 @@ public class ReverseTemplateEngine {
             result.add(entry);
         }
 
-        log.info("[ReverseEngine-BVD] 注册表坐标读取：企业='{}', 找到BVD条目={}", companyName, result.size());
+        // 将 TABLE_ROW_TEMPLATE 类型条目追加到结果末尾
+        result.addAll(bvdTableRowEntries);
+
+        log.info("[ReverseEngine-BVD] 注册表坐标读取：企业='{}', 找到BVD条目={}, TABLE_ROW_TEMPLATE条目={}",
+                companyName, result.size() - bvdTableRowEntries.size(), bvdTableRowEntries.size());
         return result;
     }
 
@@ -1601,13 +1680,13 @@ public class ReverseTemplateEngine {
         };
 
         // SummaryYear区间表：首列含"最高值"或"最低值"，按行标签关键词匹配写入 MIN/LQ/MED/UQ/MAX（5行）
-        // key=行标签关键词, value=[占位符名, SummaryYear坐标]
+        // key=行标签关键词, value=[占位符名, SummaryYear动态定位格式]
         java.util.Map<String, String[]> summaryYearRowMap = new java.util.LinkedHashMap<>();
-        summaryYearRowMap.put("最高值",    new String[]{"BVD数据模板-SummaryYear-MAX", "E18"});
-        summaryYearRowMap.put("上四分位值", new String[]{"BVD数据模板-SummaryYear-UQ",  "E17"});
-        summaryYearRowMap.put("中位值",    new String[]{"BVD数据模板-SummaryYear-MED", "E16"});
-        summaryYearRowMap.put("下四分位值", new String[]{"BVD数据模板-SummaryYear-LQ",  "E15"});
-        summaryYearRowMap.put("最低值",    new String[]{"BVD数据模板-SummaryYear-MIN", "E14"});
+        summaryYearRowMap.put("最高值",    new String[]{"BVD数据模板-SummaryYear-MAX", "D_KEYWORD:MAX"});
+        summaryYearRowMap.put("上四分位值", new String[]{"BVD数据模板-SummaryYear-UQ",  "D_KEYWORD:UQ"});
+        summaryYearRowMap.put("中位值",    new String[]{"BVD数据模板-SummaryYear-MED", "D_KEYWORD:MED"});
+        summaryYearRowMap.put("下四分位值", new String[]{"BVD数据模板-SummaryYear-LQ",  "D_KEYWORD:LQ"});
+        summaryYearRowMap.put("最低值",    new String[]{"BVD数据模板-SummaryYear-MIN", "D_KEYWORD:MIN"});
 
         int count = 0;
         boolean dataTableDone = false;
@@ -1892,8 +1971,18 @@ public class ReverseTemplateEngine {
                     unmatchedEntries.add(entry);
                     continue;
                 }
+
+                // ===== 方案A：列头自动识别 =====
+                // 扫描 Word 表格第0行（表头行）的列头文字，按 BVD_COLUMN_KEYWORD_MAP 映射为 fieldKey
+                // 成功则覆盖 entry.columnDefs；失败则回退到注册表 columnDefs
+                List<String> inferredColDefs = inferColumnDefsFromWordTable(targetTable, entry.getColumnDefs());
+                if (!inferredColDefs.equals(entry.getColumnDefs())) {
+                    log.info("[ReverseEngine-BVD-TableRow] 占位符 '{}' 列头自动识别结果：{} → 覆盖注册表默认值 {}",
+                            entry.getPlaceholderName(), inferredColDefs, entry.getColumnDefs());
+                }
+
                 String tplMark = "{{_tpl_" + entry.getPlaceholderName() + "}}";
-                List<String> colDefs = entry.getColumnDefs();
+                List<String> colDefs = inferredColDefs;
 
                 // 辅助方法：写占位符文本到一行的各列
                 java.util.function.BiConsumer<XWPFTableRow, String> writeRowMarkers = (row, rowTypeMark) -> {
@@ -2109,11 +2198,70 @@ public class ReverseTemplateEngine {
     }
 
     /**
+     * 方案A：扫描 Word 表格第0行（表头行）的列头文字，按 {@link #BVD_COLUMN_KEYWORD_MAP} 映射为 fieldKey，
+     * 动态构建本次使用的 column_defs 列表。
+     * <p>
+     * 策略：
+     * <ol>
+     *   <li>取第0行所有单元格文字（合并单元格按实际文字匹配）</li>
+     *   <li>每个单元格文字用 BVD_COLUMN_KEYWORD_MAP 的 key（contains）匹配，取第一个命中的 fieldKey</li>
+     *   <li>若至少有一列能匹配，返回完整 inferredColDefs（无法匹配的列用 null 占位，表示留空不填）</li>
+     *   <li>若一列都未匹配，返回 fallback（注册表中 columnDefs，通常为 ["#","COMPANY"]）</li>
+     * </ol>
+     * </p>
+     *
+     * @param table    Word 表格
+     * @param fallback 匹配失败时的默认 column_defs（来自注册表）
+     * @return 推断得到的 column_defs 列表（可能包含 null 占位），失败时返回 fallback
+     */
+    private List<String> inferColumnDefsFromWordTable(XWPFTable table, List<String> fallback) {
+        if (table == null || table.getRows().isEmpty()) {
+            return fallback != null ? fallback : List.of("#", "COMPANY");
+        }
+
+        XWPFTableRow headerRow = table.getRow(0);
+        List<XWPFTableCell> headerCells = headerRow.getTableCells();
+        if (headerCells.isEmpty()) {
+            return fallback != null ? fallback : List.of("#", "COMPANY");
+        }
+
+        List<String> inferred = new ArrayList<>();
+        int matchCount = 0;
+
+        for (XWPFTableCell cell : headerCells) {
+            String cellText = cell.getText();
+            if (cellText == null) {
+                inferred.add(null);
+                continue;
+            }
+            String lower = cellText.trim().toLowerCase();
+            String matchedField = null;
+            for (Map.Entry<String, String> kv : BVD_COLUMN_KEYWORD_MAP.entrySet()) {
+                if (lower.contains(kv.getKey())) {
+                    matchedField = kv.getValue();
+                    break;
+                }
+            }
+            inferred.add(matchedField);
+            if (matchedField != null) matchCount++;
+        }
+
+        if (matchCount == 0) {
+            log.debug("[ReverseEngine-BVD-ColInfer] 表格列头全部无法匹配，回退到注册表默认 columnDefs: {}", fallback);
+            return fallback != null ? fallback : List.of("#", "COMPANY");
+        }
+
+        // 过滤掉末尾连续的 null（表示表格有更多列但注册表无配置，保留不影响）
+        log.debug("[ReverseEngine-BVD-ColInfer] 列头自动推断结果（{}列命中/{}列总计）：{}",
+                matchCount, headerCells.size(), inferred);
+        return inferred;
+    }
+
+    /**
      * 判断一个 Word 表格是否为独立交易区间表。
      * <p>检测依据：首列任意单元格含"可比公司数量"/"上四分位"/"中位值"/"下四分位"/"四分位区间"关键词。</p>
      */
     private boolean isIndependentRangeTable(XWPFTable table) {
-        for (XWPFTableRow row : table.getRows()) {
             List<XWPFTableCell> cells = row.getTableCells();
             if (cells.isEmpty()) continue;
             String firstCellText = cells.get(0).getText().trim();

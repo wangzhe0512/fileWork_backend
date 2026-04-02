@@ -11,14 +11,17 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 占位符注册表接口
  * <pre>
  * GET    /placeholder-registry                       - 查询注册表（system 或 company 级）
  * GET    /placeholder-registry/effective             - 预览生效规则（企业级合并系统级）
+ * GET    /placeholder-registry/bvd-table-columns    - 查询 BVD sheet 可选列定义（方案C前端支撑）
  * POST   /placeholder-registry                       - 新建条目
  * PUT    /placeholder-registry/{id}                  - 更新条目
+ * POST   /placeholder-registry/{id}/update-column-defs - 保存企业级自定义 column_defs（方案C）
  * DELETE /placeholder-registry/{id}                  - 删除条目（软删除）
  * </pre>
  */
@@ -69,6 +72,37 @@ public class PlaceholderRegistryController {
         return R.ok(placeholderRegistryService.getEffectiveRegistry(companyId));
     }
 
+    /**
+     * 查询 BVD sheet 的所有可选列定义（方案C：前端列选择器数据源）。
+     */
+    @Operation(summary = "查询 BVD sheet 可选列定义（前端列选择器数据源）",
+            description = "返回指定 BVD sheet 的所有可选列，含 fieldKey/label/colIndex/defaultSelected。目前支持 sheetName=SummaryYear")
+    @PreAuthorize("hasAuthority('registry:list')")
+    @GetMapping("/bvd-table-columns")
+    public R<List<PlaceholderRegistryService.BvdColumnDef>> bvdTableColumns(
+            @RequestParam(defaultValue = "SummaryYear") String sheetName,
+            @RequestParam(required = false) String companyId) {
+        return R.ok(placeholderRegistryService.buildBvdColumnDefs(sheetName, companyId));
+    }
+
+    /**
+     * 保存企业级自定义 column_defs（方案C：前端勾选列后回调）。
+     */
+    @Operation(summary = "保存企业级自定义 column_defs",
+            description = "body: {\"columnDefs\":[\"#\",\"COMPANY\",\"NCP_CURRENT\"]}。若无企业级覆盖条目则自动创建，已有则直接更新 column_defs。")
+    @PreAuthorize("hasAuthority('registry:edit')")
+    @PostMapping("/{id}/update-column-defs")
+    public R<PlaceholderRegistry> updateColumnDefs(
+            @PathVariable String id,
+            @RequestParam String companyId,
+            @RequestBody Map<String, List<String>> body) {
+        List<String> columnDefs = body.get("columnDefs");
+        if (columnDefs == null || columnDefs.isEmpty()) {
+            return R.fail(400, "columnDefs 不能为空");
+        }
+        return R.ok(placeholderRegistryService.updateColumnDefs(id, companyId, columnDefs));
+    }
+
     @Operation(summary = "新建注册表条目")
     @PreAuthorize("hasAuthority('registry:edit')")
     @PostMapping
@@ -104,3 +138,5 @@ public class PlaceholderRegistryController {
         return R.ok(placeholderRegistryService.overrideForCompany(id, companyId, overrides));
     }
 }
+
+
