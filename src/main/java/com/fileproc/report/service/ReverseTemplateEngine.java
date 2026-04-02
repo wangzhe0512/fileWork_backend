@@ -2262,6 +2262,7 @@ public class ReverseTemplateEngine {
      * <p>检测依据：首列任意单元格含"可比公司数量"/"上四分位"/"中位值"/"下四分位"/"四分位区间"关键词。</p>
      */
     private boolean isIndependentRangeTable(XWPFTable table) {
+        for (XWPFTableRow row : table.getRows()) {
             List<XWPFTableCell> cells = row.getTableCells();
             if (cells.isEmpty()) continue;
             String firstCellText = cells.get(0).getText().trim();
