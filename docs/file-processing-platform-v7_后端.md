@@ -99,7 +99,7 @@ if ("bvd".equals(ph.getDataSource()) && "SummaryYear".equals(ph.getSourceSheet()
 
 **`getColumnDefsForPlaceholder`**
 
-从 `PlaceholderRegistryService` 取该占位符的 columnDefs，兜底返回 `["#","COMPANY"]`。
+从 `PlaceholderRegistryService` 取该占位符的有效 columnDefs（企业级优先，系统级兜底），兜底使用注册表条目自身的系统级 `columnDefs`，不存在时才用空列表。
 
 **`extractSummaryYearRowData`**
 
@@ -115,21 +115,30 @@ if ("bvd".equals(ph.getDataSource()) && "SummaryYear".equals(ph.getSourceSheet()
 
 ### 3. 注册表 API（`PlaceholderRegistryController` + `PlaceholderRegistryService`）
 
-新增两个接口，支持前端"方案C：企业级列选择"：
+新增两个通用接口，针对**所有 `TABLE_ROW_TEMPLATE` 类型**的占位符，支持前端企业级列选择配置：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/placeholder-registry/bvd-table-columns?sheetName=SummaryYear&companyId=` | 返回 SummaryYear 所有可选列定义（12列），标注哪些已被企业选中 |
+| GET | `/api/placeholder-registry/{id}/column-defs?companyId=` | 查询指定占位符的所有可选列定义，标注哪些列当前已被选中 |
 | POST | `/api/placeholder-registry/{id}/update-column-defs?companyId=` | 保存企业级列选择，body: `{"columnDefs":["#","COMPANY","NCP_CURRENT"]}` |
 
-`BvdColumnDef` DTO（`PlaceholderRegistryService` 内部类）：
+**接口说明：**
+
+- `{id}` 为注册表条目 id（系统级），前端在加载占位符配置页时已持有
+- `companyId` 为当前企业 id，不传则操作系统级默认
+- GET 接口返回该占位符注册表条目中所有**已知可选列**（来自该条目的元数据/KeywordMap），并标注 `selected=true/false`：
+  - 有企业级覆盖条目 → 以企业级 `columnDefs` 为已选列
+  - 无企业级覆盖 → 以系统级 `columnDefs` 为已选列（即系统默认勾选列）
+- 接口不限于 BVD，任何 `TABLE_ROW_TEMPLATE` 类型的占位符均可调用
+
+`ColumnDefItem` DTO（`PlaceholderRegistryService` 内部类，原 `BvdColumnDef` 改名通用化）：
 
 ```java
-public static class BvdColumnDef {
-    String fieldKey;      // 字段标识，如 "COMPANY"
-    String label;         // 展示名，如 "可比公司名称"
-    int colIndex;         // 在 Excel 中对应的列索引
-    boolean defaultSelected;  // 是否默认选中
+public static class ColumnDefItem {
+    String fieldKey;   // 字段标识，如 "COMPANY"
+    String label;      // 展示名，如 "可比公司名称"
+    int colIndex;      // 在 Excel 中对应的列索引
+    boolean selected;  // 是否已被选中（企业级优先，系统级兜底）
 }
 ```
 
@@ -181,13 +190,13 @@ src/main/java/com/fileproc/
 ├── registry/
 │   ├── controller/
 │   │   └── PlaceholderRegistryController.java  [MODIFY]
-│   │         - 新增 GET /bvd-table-columns 接口
+│   │         - 新增 GET /{id}/column-defs 接口（通用，替代原 /bvd-table-columns）
 │   │         - 新增 POST /{id}/update-column-defs 接口
 │   └── service/
 │       └── PlaceholderRegistryService.java     [MODIFY]
-│             - 新增 buildBvdColumnDefs 方法
-│             - 新增 updateColumnDefs 方法
-│             - 新增内部 DTO BvdColumnDef
+│             - 新增 getColumnDefItems(registryId, companyId) 方法（通用，适用所有 TABLE_ROW_TEMPLATE 条目）
+│             - 新增 updateColumnDefs(registryId, companyId, columnDefs) 方法
+│             - 新增内部 DTO ColumnDefItem（原 BvdColumnDef 改名，selected 字段替代 defaultSelected）
 src/main/resources/db/
 ├── V9__placeholder_registry_and_schema.sql     [MODIFY] SummaryYear 条目类型改为 TABLE_ROW_TEMPLATE
 └── V13__fix_summary_year_table_type.sql        [NEW]    UPDATE 已部署记录
@@ -225,8 +234,9 @@ ReportGenerateEngine.generate(templateDocx, dataMap, companyId)
 ### 企业级列配置（前端调用）
 
 ```
-GET  /api/placeholder-registry/bvd-table-columns?sheetName=SummaryYear&companyId=xxx
-  → 返回 12 列 BvdColumnDef 列表，标注 defaultSelected
+GET  /api/placeholder-registry/{id}/column-defs?companyId=xxx
+  → 返回该占位符所有可选列（ColumnDefItem 列表）
+  → selected=true 表示当前已选中（企业级优先，无企业级则用系统级 columnDefs）
 
 POST /api/placeholder-registry/{id}/update-column-defs?companyId=xxx
   body: {"columnDefs":["#","COMPANY","FY2023_STATUS","NCP_CURRENT"]}

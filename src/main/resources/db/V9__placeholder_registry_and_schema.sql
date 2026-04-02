@@ -53,7 +53,7 @@ INSERT INTO `placeholder_registry`
 SELECT * FROM (
 
 -- ===== 第一类：数据表单元格占位符（清单 → 数据表 Sheet B1~B8） =====
-SELECT UUID() AS id, 'system' AS level, '清单模板-数据表-B1' AS placeholder_name, '企业全称'   AS display_name, 'DATA_CELL' AS ph_type, 'list' AS data_source, '数据表' AS sheet_name, 'B1' AS cell_address, NULL AS title_keywords, NULL AS column_defs, 10  AS sort, 1 AS enabled, 0 AS deleted UNION ALL
+SELECT UUID() AS id, 'system' AS level, '清单模板-数据表-B1' AS placeholder_name, '企业名称'   AS display_name, 'DATA_CELL' AS ph_type, 'list' AS data_source, '数据表' AS sheet_name, 'B1' AS cell_address, NULL AS title_keywords, NULL AS column_defs, 10  AS sort, 1 AS enabled, 0 AS deleted UNION ALL
 SELECT UUID(), 'system', '清单模板-数据表-B2', '年度',       'DATA_CELL', 'list', '数据表', 'B2', NULL, NULL, 20,  1, 0 UNION ALL
 SELECT UUID(), 'system', '清单模板-数据表-B3', '事务所名称', 'DATA_CELL', 'list', '数据表', 'B3', NULL, NULL, 30,  1, 0 UNION ALL
 SELECT UUID(), 'system', '清单模板-数据表-B4', '事务所简称', 'DATA_CELL', 'list', '数据表', 'B4', NULL, NULL, 40,  1, 0 UNION ALL

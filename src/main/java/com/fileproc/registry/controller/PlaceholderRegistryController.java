@@ -16,13 +16,13 @@ import java.util.Map;
 /**
  * 占位符注册表接口
  * <pre>
- * GET    /placeholder-registry                       - 查询注册表（system 或 company 级）
- * GET    /placeholder-registry/effective             - 预览生效规则（企业级合并系统级）
- * GET    /placeholder-registry/bvd-table-columns    - 查询 BVD sheet 可选列定义（方案C前端支撑）
- * POST   /placeholder-registry                       - 新建条目
- * PUT    /placeholder-registry/{id}                  - 更新条目
- * POST   /placeholder-registry/{id}/update-column-defs - 保存企业级自定义 column_defs（方案C）
- * DELETE /placeholder-registry/{id}                  - 删除条目（软删除）
+ * GET    /placeholder-registry                          - 查询注册表（system 或 company 级）
+ * GET    /placeholder-registry/effective                - 预览生效规则（企业级合并系统级）
+ * GET    /placeholder-registry/{id}/column-defs        - 查询 TABLE_ROW_TEMPLATE 占位符的可选列定义（通用列选择器）
+ * POST   /placeholder-registry                          - 新建条目
+ * PUT    /placeholder-registry/{id}                     - 更新条目
+ * POST   /placeholder-registry/{id}/update-column-defs - 保存企业级自定义 column_defs
+ * DELETE /placeholder-registry/{id}                     - 删除条目（软删除）
  * </pre>
  */
 @Tag(name = "占位符注册表")
@@ -73,16 +73,18 @@ public class PlaceholderRegistryController {
     }
 
     /**
-     * 查询 BVD sheet 的所有可选列定义（方案C：前端列选择器数据源）。
+     * 查询指定 TABLE_ROW_TEMPLATE 占位符的所有可选列定义（通用列选择器数据源）。
+     * 适用于所有 TABLE_ROW_TEMPLATE 类型的占位符，不限 BVD。
+     * selected=true 表示当前已选中（企业级优先，无企业级则用系统级 column_defs）。
      */
-    @Operation(summary = "查询 BVD sheet 可选列定义（前端列选择器数据源）",
-            description = "返回指定 BVD sheet 的所有可选列，含 fieldKey/label/colIndex/defaultSelected。目前支持 sheetName=SummaryYear")
+    @Operation(summary = "查询 TABLE_ROW_TEMPLATE 占位符的可选列定义（通用列选择器数据源）",
+            description = "返回指定占位符的所有可选列，含 fieldKey/label/colIndex/selected。适用于所有 TABLE_ROW_TEMPLATE 类型条目。")
     @PreAuthorize("hasAuthority('registry:list')")
-    @GetMapping("/bvd-table-columns")
-    public R<List<PlaceholderRegistryService.BvdColumnDef>> bvdTableColumns(
-            @RequestParam(defaultValue = "SummaryYear") String sheetName,
+    @GetMapping("/{id}/column-defs")
+    public R<List<PlaceholderRegistryService.ColumnDefItem>> columnDefs(
+            @PathVariable String id,
             @RequestParam(required = false) String companyId) {
-        return R.ok(placeholderRegistryService.buildBvdColumnDefs(sheetName, companyId));
+        return R.ok(placeholderRegistryService.getColumnDefItems(id, companyId));
     }
 
     /**

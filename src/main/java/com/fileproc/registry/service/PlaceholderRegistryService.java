@@ -286,43 +286,52 @@ public class PlaceholderRegistryService {
         }
     }
 
-    // ========== 方案C：BVD 列选择接口 ==========
+    // ========== TABLE_ROW_TEMPLATE 列选择接口 ==========
 
     /**
-     * 构建 BVD sheet 的可选列定义列表（前端列选择器数据源）。
+     * 获取指定 TABLE_ROW_TEMPLATE 占位符的所有可选列定义（前端列选择器数据源）。
      * <p>
-     * 基于 {@link ReverseTemplateEngine#BVD_COLUMN_KEYWORD_MAP} 的已知字段和内置默认列索引，
-     * 返回指定 sheet 所有可选列的元数据。
-     * 系统默认选中列由系统级 column_defs 决定。
+     * 通用接口，适用于所有 TABLE_ROW_TEMPLATE 类型的注册表条目。
+     * 已选中状态（{@link ColumnDefItem#selected}）由该条目的有效 column_defs 决定：
+     * 企业级覆盖条目存在则用企业级，否则用系统级条目自身的 column_defs。
+     * 不硬编码默认选中列。
      * </p>
      *
-     * @param sheetName BVD sheet 名，目前支持 "SummaryYear"
-     * @param companyId 企业ID（用于获取企业级默认选中列；null 时使用系统级）
+     * @param registryId 系统级注册表条目 ID
+     * @param companyId  企业ID（用于获取企业级已选列；null 时使用系统级 column_defs）
      * @return 可选列定义列表
      */
-    public List<BvdColumnDef> buildBvdColumnDefs(String sheetName, String companyId) {
-        if (!"SummaryYear".equals(sheetName)) {
-            // 目前只支持 SummaryYear，后续可扩展
-            return Collections.emptyList();
+    public List<ColumnDefItem> getColumnDefItems(String registryId, String companyId) {
+        // 查询系统级条目
+        PlaceholderRegistry system = placeholderRegistryMapper.selectById(registryId);
+        if (system == null) {
+            throw BizException.notFound("注册表条目");
+        }
+        if (!"TABLE_ROW_TEMPLATE".equals(system.getPhType())) {
+            throw BizException.of(400, "该接口仅支持 TABLE_ROW_TEMPLATE 类型的占位符，当前类型: " + system.getPhType());
         }
 
-        // 获取当前有效 column_defs（企业级优先，系统级兜底）
-        List<String> effectiveColDefs = List.of("#", "COMPANY"); // 系统默认
-        try {
-            List<ReverseTemplateEngine.RegistryEntry> registry = getEffectiveRegistry(companyId);
-            for (ReverseTemplateEngine.RegistryEntry entry : registry) {
-                if ("BVD数据模板-SummaryYear-第一张表格".equals(entry.getPlaceholderName())
-                        && entry.getColumnDefs() != null && !entry.getColumnDefs().isEmpty()) {
-                    effectiveColDefs = entry.getColumnDefs();
-                    break;
+        // 获取有效 column_defs：企业级优先，系统级兜底
+        List<String> effectiveColDefs = parseJsonList(system.getColumnDefs());
+        if (effectiveColDefs == null) effectiveColDefs = Collections.emptyList();
+
+        if (companyId != null && !companyId.trim().isEmpty()) {
+            try {
+                PlaceholderRegistry companyEntry = placeholderRegistryMapper
+                        .selectCompanyByName(companyId, system.getPlaceholderName());
+                if (companyEntry != null && companyEntry.getColumnDefs() != null) {
+                    List<String> companyColDefs = parseJsonList(companyEntry.getColumnDefs());
+                    if (companyColDefs != null && !companyColDefs.isEmpty()) {
+                        effectiveColDefs = companyColDefs;
+                    }
                 }
+            } catch (Exception e) {
+                log.warn("[RegistryService] 读取企业级 column_defs 失败，使用系统级兜底: {}", e.getMessage());
             }
-        } catch (Exception e) {
-            log.warn("[RegistryService] 读取 SummaryYear column_defs 失败，使用默认: {}", e.getMessage());
         }
 
-        // 构建标准列定义（基于内置已知列顺序）
-        // fieldKey, label（Excel列头）, colIndex（0-based）
+        // 内置已知列元数据（fieldKey / label / colIndex）
+        // 目前对应 BVD SummaryYear，后续可扩展为从注册表条目元数据字段读取
         String[][] knownCols = {
                 {"#",             "#",              "0"},
                 {"COMPANY",       "COMPANY",        "1"},
@@ -339,14 +348,14 @@ public class PlaceholderRegistryService {
         };
 
         final List<String> finalEffectiveColDefs = effectiveColDefs;
-        List<BvdColumnDef> result = new ArrayList<>();
+        List<ColumnDefItem> result = new ArrayList<>();
         for (String[] col : knownCols) {
-            BvdColumnDef def = new BvdColumnDef();
-            def.setFieldKey(col[0]);
-            def.setLabel(col[1]);
-            def.setColIndex(Integer.parseInt(col[2]));
-            def.setDefaultSelected(finalEffectiveColDefs.contains(col[0]));
-            result.add(def);
+            ColumnDefItem item = new ColumnDefItem();
+            item.setFieldKey(col[0]);
+            item.setLabel(col[1]);
+            item.setColIndex(Integer.parseInt(col[2]));
+            item.setSelected(finalEffectiveColDefs.contains(col[0]));
+            result.add(item);
         }
         return result;
     }
@@ -414,18 +423,18 @@ public class PlaceholderRegistryService {
     // ========== 内部 DTO ==========
 
     /**
-     * BVD 可选列定义（前端列选择接口返回类型）
+     * TABLE_ROW_TEMPLATE 占位符的可选列定义（前端列选择接口返回类型）
      */
     @Data
-    public static class BvdColumnDef {
+    public static class ColumnDefItem {
         /** 字段键（对应 column_defs 数组元素），如 "NCP_CURRENT" */
         private String fieldKey;
         /** Excel 原始列头文字，如 "2020-2022 NCP" */
         private String label;
         /** Excel 列索引（0-based） */
         private int colIndex;
-        /** 是否默认选中（系统级 column_defs 中包含的列） */
-        private boolean defaultSelected;
+        /** 是否已选中（企业级 column_defs 优先，无企业级则用系统级 column_defs） */
+        private boolean selected;
     }
 }
 
