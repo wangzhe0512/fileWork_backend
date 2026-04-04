@@ -117,11 +117,18 @@ public class ReverseTemplateEngine {
         List<String> titleKeywords;
 
         /**
-         * TABLE_ROW_TEMPLATE 专用：列字段名定义列表，index 对应 Word 表格列索引。
+         * TABLE_ROW_TEMPLATE 专用：列字段名定义列表（默认选中列），index 对应 Word 表格列索引。
          * 反向生成时每列写入 {{_col_字段名}}；生成时按字段名从 Excel 行 Map 取值。
          * 其他类型为 null。
          */
         List<String> columnDefs;
+
+        /**
+         * TABLE_ROW_TEMPLATE 专用：全量可选列字段名列表（前端列选择器数据源）。
+         * 为 null 时 fallback 到 columnDefs（向后兼容，表示全量=默认全选）。
+         * 仅系统级条目有意义，企业级覆盖不复制此字段。
+         */
+        List<String> availableColDefs;
 
         /** 构造方法（原6参数，DATA_CELL/LONG_TEXT/BVD 使用，titleKeywords=null） */
         public RegistryEntry(String placeholderName, String displayName, PlaceholderType type,
@@ -134,6 +141,7 @@ public class ReverseTemplateEngine {
             this.cellAddress = cellAddress;
             this.titleKeywords = null;
             this.columnDefs = null;
+            this.availableColDefs = null;
         }
 
         /** 构造方法（7参数，TABLE_CLEAR 使用，额外传入前置标题关键词列表） */
@@ -148,9 +156,10 @@ public class ReverseTemplateEngine {
             this.cellAddress = cellAddress;
             this.titleKeywords = titleKeywords;
             this.columnDefs = null;
+            this.availableColDefs = null;
         }
 
-        /** 构造方法（8参数，TABLE_ROW_TEMPLATE 使用，额外传入列字段名列表） */
+        /** 构造方法（8参数，TABLE_ROW_TEMPLATE 使用，全量可选=默认全选场景） */
         public RegistryEntry(String placeholderName, String displayName, PlaceholderType type,
                       String dataSource, String sheetName, String cellAddress,
                       List<String> titleKeywords, List<String> columnDefs) {
@@ -162,6 +171,22 @@ public class ReverseTemplateEngine {
             this.cellAddress = cellAddress;
             this.titleKeywords = titleKeywords;
             this.columnDefs = columnDefs;
+            this.availableColDefs = null;
+        }
+
+        /** 构造方法（9参数，TABLE_ROW_TEMPLATE 使用，全量可选列 != 默认选中列场景） */
+        public RegistryEntry(String placeholderName, String displayName, PlaceholderType type,
+                      String dataSource, String sheetName, String cellAddress,
+                      List<String> titleKeywords, List<String> columnDefs, List<String> availableColDefs) {
+            this.placeholderName = placeholderName;
+            this.displayName = displayName;
+            this.type = type;
+            this.dataSource = dataSource;
+            this.sheetName = sheetName;
+            this.cellAddress = cellAddress;
+            this.titleKeywords = titleKeywords;
+            this.columnDefs = columnDefs;
+            this.availableColDefs = availableColDefs;
         }
     }
 
@@ -182,80 +207,124 @@ public class ReverseTemplateEngine {
 
         // ===== 第一类：数据表单元格占位符（清单.xlsx → 数据表 Sheet B1~B8） =====
         // 来源：标准模板"数据表" Sheet，A列=字段名，B列=值
-        reg.add(new RegistryEntry("清单模板-数据表-B1", "企业全称",   PlaceholderType.DATA_CELL, "list", "数据表", "B1"));
-        reg.add(new RegistryEntry("清单模板-数据表-B2", "年度",       PlaceholderType.DATA_CELL, "list", "数据表", "B2"));
-        reg.add(new RegistryEntry("清单模板-数据表-B3", "事务所名称", PlaceholderType.DATA_CELL, "list", "数据表", "B3"));
-        reg.add(new RegistryEntry("清单模板-数据表-B4", "事务所简称", PlaceholderType.DATA_CELL, "list", "数据表", "B4"));
-        reg.add(new RegistryEntry("清单模板-数据表-B5", "企业简称",   PlaceholderType.DATA_CELL, "list", "数据表", "B5"));
-        reg.add(new RegistryEntry("清单模板-数据表-B6", "母公司全称", PlaceholderType.DATA_CELL, "list", "数据表", "B6"));
-        reg.add(new RegistryEntry("清单模板-数据表-B7", "集团简介",   PlaceholderType.LONG_TEXT, "list", "数据表", "B7"));
-        reg.add(new RegistryEntry("清单模板-数据表-B8", "公司概况",   PlaceholderType.LONG_TEXT, "list", "数据表", "B8"));
+        reg.add(new RegistryEntry("清单模板-数据表-B1", "企业名称",       PlaceholderType.DATA_CELL, "list", "数据表", "B1")); // V14: 企业全称→企业名称
+        reg.add(new RegistryEntry("清单模板-数据表-B2", "年度",           PlaceholderType.DATA_CELL, "list", "数据表", "B2"));
+        reg.add(new RegistryEntry("清单模板-数据表-B3", "事务所名称",     PlaceholderType.DATA_CELL, "list", "数据表", "B3"));
+        reg.add(new RegistryEntry("清单模板-数据表-B4", "事务所简称",     PlaceholderType.DATA_CELL, "list", "数据表", "B4"));
+        reg.add(new RegistryEntry("清单模板-数据表-B5", "企业简称",       PlaceholderType.DATA_CELL, "list", "数据表", "B5"));
+        reg.add(new RegistryEntry("清单模板-数据表-B6", "母公司全称",     PlaceholderType.DATA_CELL, "list", "数据表", "B6"));
+        reg.add(new RegistryEntry("清单模板-数据表-B7", "集团情况描述",   PlaceholderType.LONG_TEXT, "list", "数据表", "B7")); // V15: 集团简介→集团情况描述
+        reg.add(new RegistryEntry("清单模板-数据表-B8", "公司经营背景", PlaceholderType.LONG_TEXT, "list", "数据表", "B8")); // V15: 公司概况→公司经营背景资料; V36: 改为公司经营背景
+        // V17: 被测关联交易利润水平（被测关联交易 Sheet B1）
+        reg.add(new RegistryEntry("清单模板-被测关联交易-B1", "被测关联交易利润水平", PlaceholderType.DATA_CELL, "list", "被测关联交易", "B1"));
 
         // ===== 第二类：整表/区域占位符，分两种策略 =====
         // TABLE_CLEAR_FULL（财务状况表整表展开）：整张表全部清空，仅第一格写占位符，生成时从 PL Sheet 逐行展开三列数据
-        reg.add(new RegistryEntry("清单模板-PL",                   "PL全表",       PlaceholderType.TABLE_CLEAR_FULL, "list", "PL", null,
+        reg.add(new RegistryEntry("清单模板-PL",                   "PL财务数据",               PlaceholderType.TABLE_CLEAR_FULL, "list", "PL", null,
                 List.of("财务状况")));
-        reg.add(new RegistryEntry("清单模板-PL含特殊因素调整",      "PL含特殊因素", PlaceholderType.TABLE_CLEAR_FULL, "list", "PL含特殊因素调整", null,
+        reg.add(new RegistryEntry("清单模板-PL含特殊因素调整",      "PL财务数据（含特殊因素调整）", PlaceholderType.TABLE_CLEAR_FULL, "list", "PL含特殊因素调整", null,
                 List.of("含特殊", "特殊因素调整")));
 
         // TABLE_CLEAR_FULL（非财务整表）：整张表全部清空，仅第一格写占位符
-        reg.add(new RegistryEntry("清单模板-1_组织结构及管理架构",  "组织结构",   PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
-                List.of("组织结构", "部门结构", "管理架构", "组织架构")));
-        reg.add(new RegistryEntry("清单模板-主要产品-A列中所列所有产品", "主要产品", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
-                List.of("主要产品", "产品清单", "产品信息", "产品列表")));
-        reg.add(new RegistryEntry("清单模板-2_关联公司信息",        "关联公司信息", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
-                List.of("关联公司", "关联方公司", "关联企业")));
-        reg.add(new RegistryEntry("清单模板-关联方个人信息",        "关联方个人信息", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
-                List.of("关联方个人", "关联个人", "个人信息")));
-        reg.add(new RegistryEntry("清单模板-关联关系变化情况",      "关联关系变化", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
-                List.of("关联关系变化", "关联变化", "关系变化")));
-        reg.add(new RegistryEntry("清单模板-关联交易汇总表",        "关联交易汇总", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
-                List.of("关联交易汇总", "关联交易总", "关联交易合计")));
+        // V30: 清单模板-主要产品 升级为 TABLE_ROW_TEMPLATE（单行表头，3列，含合计行→subtotal）
+        reg.add(new RegistryEntry("清单模板-主要产品", "主要产品",
+                PlaceholderType.TABLE_ROW_TEMPLATE, "list", "主要产品", null,
+                List.of("主要产品", "产品清单", "产品信息", "产品列表"),
+                List.of("产品", "销售额（万元）", "占比(%)"),
+                List.of("产品", "销售额（万元）", "占比(%)")));
         // TABLE_ROW_TEMPLATE：行模板克隆（动态行数明细表），注意需在 客户清单/供应商清单 之前注册，防止关键词抢先匹配
-        reg.add(new RegistryEntry("清单模板-4_供应商关联采购明细", "关联采购明细",
+        reg.add(new RegistryEntry("清单模板-关联交易汇总表", "关联交易汇总",
+                PlaceholderType.TABLE_ROW_TEMPLATE, "list", "关联交易汇总表", null,
+                List.of("关联交易汇总", "关联交易总", "关联交易合计"),
+                List.of("关联交易类型", "境外交易金额", "境内交易金额", "交易总额"),
+                List.of("关联交易类型", "境外交易金额", "境内交易金额", "交易总额")));
+        reg.add(new RegistryEntry("清单模板-关联关系变化情况", "关联关系变化",
+                PlaceholderType.TABLE_ROW_TEMPLATE, "list", "关联关系变化情况", null,
+                List.of("关联关系变化", "关联变化", "关系变化"),
+                List.of("关联方名称", "国家/地区", "关联关系类型", "起止日期", "变化原因"),
+                List.of("关联方名称", "国家/地区", "关联关系类型", "起止日期", "变化原因")));
+        reg.add(new RegistryEntry("清单模板-关联方个人信息", "关联方个人信息",
+                PlaceholderType.TABLE_ROW_TEMPLATE, "list", "关联方个人信息", null,
+                List.of("关联方个人", "关联个人", "个人信息"),
+                List.of("个人关联方", "国籍", "关联关系类型", "居住地址"),
+                List.of("个人关联方", "国籍", "关联关系类型", "居住地址")));
+        reg.add(new RegistryEntry("清单模板-2_关联公司信息", "关联公司信息",
+                PlaceholderType.TABLE_ROW_TEMPLATE, "list", "2 关联公司信息", null,
+                List.of("关联公司", "关联方公司", "关联企业"),
+                List.of("关联方名称", "国家（地区）", "关联关系类型"),
+                List.of("行次", "关联方名称", "关联方类型", "国家（地区）", "纳税人证件类型", "证件号",
+                        "关联关系类型", "起始日期", "截止日期", "法定税率", "是否享受税收优惠")));
+        reg.add(new RegistryEntry("清单模板-1_组织结构及管理架构", "组织结构",
+                PlaceholderType.TABLE_ROW_TEMPLATE, "list", "1 组织结构及管理架构", null,
+                List.of("组织结构", "部门结构", "管理架构", "组织架构"),
+                List.of("主要部门", "人数", "主要职责范围"),
+                List.of("主要部门", "人数", "主要职责范围", "汇报对象", "汇报对象主要办公所在")));
+        reg.add(new RegistryEntry("清单模板-4_供应商清单-关联采购明细", "关联采购明细",
                 PlaceholderType.TABLE_ROW_TEMPLATE, "list", "4 供应商清单", null,
                 List.of("关联采购交易明细", "关联采购明细表", "采购交易明细表"),
                 List.of("供应商名称", "金额（人民币）", "占关联采购总金额比例")));
-        reg.add(new RegistryEntry("清单模板-5_客户关联销售明细", "关联销售明细",
+        reg.add(new RegistryEntry("清单模板-5_客户清单-关联销售明细", "关联销售明细",
                 PlaceholderType.TABLE_ROW_TEMPLATE, "list", "5 客户清单", null,
                 List.of("关联销售交易明细", "关联销售明细表", "销售交易明细表"),
                 List.of("客户名称", "金额（人民币）", "占营业收入比例")));
-        reg.add(new RegistryEntry("清单模板-5_客户清单",            "客户清单",   PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
-                List.of("客户清单", "主要客户", "前五大客户", "主要客户情况")));
-        reg.add(new RegistryEntry("清单模板-4_供应商清单",          "供应商清单", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
-                List.of("供应商清单", "主要供应商", "前五大供应商", "供应商情况")));
+        // [DEPRECATED] 清单模板-5_客户清单（TABLE_CLEAR_FULL，sourceSheet=null，生成引擎无填充逻辑，暂时废弃；客户数据由 清单模板-5_客户清单-关联销售明细 处理）
+        // reg.add(new RegistryEntry("清单模板-5_客户清单",            "客户清单",   PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
+        //         List.of("客户清单", "主要客户", "前五大客户", "主要客户情况")));
+        // [DEPRECATED] 清单模板-4_供应商清单（TABLE_CLEAR_FULL，sourceSheet=null，生成引擎无填充逻辑，暂时废弃）
+        // reg.add(new RegistryEntry("清单模板-4_供应商清单",          "供应商清单", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
+        //         List.of("供应商清单", "主要供应商", "前五大供应商", "供应商情况")));
         // TABLE_ROW_TEMPLATE：劳务支出/收入明细表（动态行数，共用 "6 劳务交易表" Sheet，按行次范围区分）
         // 注意：需在下方 TABLE_CLEAR_FULL 劳务成本条目之前注册，防止关键词被后者抢先匹配
-        reg.add(new RegistryEntry("清单模板-6_劳务支出明细", "接受关联劳务明细",
+        reg.add(new RegistryEntry("清单模板-6_劳务交易表-劳务支出明细", "接受关联劳务明细",
                 PlaceholderType.TABLE_ROW_TEMPLATE, "list", "6 劳务交易表", null,
                 List.of("接受关联劳务明细", "关联劳务支出明细", "劳务支出明细表"),
                 List.of("关联方名称", "交易金额", "占总经营成本费用比重（%）")));
-        reg.add(new RegistryEntry("清单模板-6_劳务收入明细", "提供关联劳务明细",
+        reg.add(new RegistryEntry("清单模板-6_劳务交易表-劳务收入明细", "提供关联劳务明细",
                 PlaceholderType.TABLE_ROW_TEMPLATE, "list", "6 劳务交易表", null,
                 List.of("提供关联劳务明细", "关联劳务收入明细", "劳务收入明细表"),
                 List.of("关联方名称", "交易金额", "占营业收入比重（%）")));
-        reg.add(new RegistryEntry("清单模板-劳务成本费用归集",      "劳务成本费用", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
-                List.of("劳务成本", "费用归集", "成本归集")));
-        reg.add(new RegistryEntry("清单模板-资金融通",              "资金融通",   PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
-                List.of("资金融通", "资金借贷", "融通")));
-        reg.add(new RegistryEntry("清单模板-有形资产信息",          "有形资产信息", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
-                List.of("有形资产", "固定资产", "资产信息")));
-        reg.add(new RegistryEntry("清单模板-功能风险汇总表",        "功能风险汇总", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
-                List.of("功能风险", "功能分析", "风险汇总", "功能与风险")));
-        reg.add(new RegistryEntry("清单模板-3_分部财务数据",        "分部财务数据", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
+        // TABLE_ROW_TEMPLATE：劳务成本归集（从 TABLE_CLEAR_FULL 升级，V25迁移对应）
+        reg.add(new RegistryEntry("清单模板-劳务成本归集", "劳务成本归集",
+                PlaceholderType.TABLE_ROW_TEMPLATE, "list", "劳务成本归集", null,
+                List.of("劳务成本归集", "成本归集", "劳务成本费用归集"),
+                List.of("劳务内容", "分配方法", "总成本费用", "所需承担的比例")));
+        // TABLE_ROW_TEMPLATE：资金融通（从 TABLE_CLEAR_FULL 升级，V26迁移对应）
+        reg.add(new RegistryEntry("清单模板-资金融通", "资金融通",
+                PlaceholderType.TABLE_ROW_TEMPLATE, "list", "资金融通", null,
+                List.of("资金融通", "资金借贷", "融通"),
+                List.of("关联方", "金额")));
+        // TABLE_ROW_TEMPLATE：有形资产信息（从 TABLE_CLEAR_FULL 升级，V28迁移对应）
+        reg.add(new RegistryEntry("清单模板-有形资产信息", "有形资产信息",
+                PlaceholderType.TABLE_ROW_TEMPLATE, "list", "有形资产信息", null,
+                List.of("有形资产", "固定资产", "资产信息"),
+                List.of("资产净值", "年初数", "年末数")));
+        // TABLE_ROW_TEMPLATE：功能风险汇总表（从 TABLE_CLEAR_FULL 升级，V29迁移对应）
+        reg.add(new RegistryEntry("清单模板-功能风险汇总表", "功能风险汇总",
+                PlaceholderType.TABLE_ROW_TEMPLATE, "list", "功能风险汇总表", null,
+                List.of("功能风险", "功能分析", "风险汇总", "功能与风险"),
+                List.of("序号", "风险", "【清单模板-数据表B5】", "关联方")));
+        // V31: 补全 sheet_name（类型维持 TABLE_CLEAR_FULL，title_keywords 保留用于 Word 表格精确绑定）
+        reg.add(new RegistryEntry("清单模板-3_分部财务数据",        "分部财务数据", PlaceholderType.TABLE_CLEAR_FULL, "list", "3 分部财务数据", null,
                 List.of("分部财务", "分部数据", "分部财务数据")));
-        reg.add(new RegistryEntry("清单模板-公司经营背景资料",      "公司经营背景", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
-                List.of("经营背景", "公司背景", "背景资料", "经营情况")));
-        reg.add(new RegistryEntry("清单数据模板-公司间资金融通交易总结", "公司间资金融通", PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
-                List.of("公司间资金", "资金融通交易总结", "公司间融通", "资金融通总结")));
+        // V16（代码补同步）: 公司经营背景资料 Sheet A1 为单个长文本单元格，改为 LONG_TEXT 类型
+        reg.add(new RegistryEntry("清单模板-公司经营背景资料",      "公司经营背景资料", PlaceholderType.LONG_TEXT, "list", "公司经营背景资料", "A1")); // V36: 公司经营背景→公司经营背景资料
+        // V16（代码补同步）: 集团背景情况 Sheet A1 长文本，此前缺失
+        reg.add(new RegistryEntry("清单模板-集团背景情况-A1",       "集团背景情况", PlaceholderType.LONG_TEXT, "list", "集团背景情况",     "A1"));
+        // TABLE_ROW_TEMPLATE：公司间资金融通（从 TABLE_CLEAR_FULL 升级，V27迁移对应）
+        reg.add(new RegistryEntry("清单模板-公司间资金融通", "公司间资金融通",
+                PlaceholderType.TABLE_ROW_TEMPLATE, "list", "公司间资金融通交易总结", null,
+                List.of("公司间资金", "资金融通交易总结", "公司间融通", "资金融通总结"),
+                List.of("缔约方", "公司间资金融通交易性质", "货币", "本金（原币）", "本金（人民币）",
+                        "到期期限", "利率", "利息收入/利息支出（原币）", "利息收入/利息支出（人民币）")));
 
         // ===== 第三类：行业情况长文本占位符（清单 → 行业情况 Sheet B1~B5） =====
         // 来源：标准模板"行业情况" Sheet，B1~B5 各为一段长文本
-        reg.add(new RegistryEntry("清单模板-行业情况-B1", "行业情况B1", PlaceholderType.LONG_TEXT, "list", "行业情况", "B1"));
-        reg.add(new RegistryEntry("清单模板-行业情况-B2", "行业情况B2", PlaceholderType.LONG_TEXT, "list", "行业情况", "B2"));
-        reg.add(new RegistryEntry("清单模板-行业情况-B3", "行业情况B3", PlaceholderType.LONG_TEXT, "list", "行业情况", "B3"));
-        reg.add(new RegistryEntry("清单模板-行业情况-B4", "行业情况B4", PlaceholderType.LONG_TEXT, "list", "行业情况", "B4"));
-        reg.add(new RegistryEntry("清单模板-行业情况-B5", "行业情况B5", PlaceholderType.LONG_TEXT, "list", "行业情况", "B5"));
+        // V16: 行业情况 B1~B5 display_name 同步
+        reg.add(new RegistryEntry("清单模板-行业情况-B1", "全球行业情况",       PlaceholderType.LONG_TEXT, "list", "行业情况", "B1"));
+        reg.add(new RegistryEntry("清单模板-行业情况-B2", "中国行业情况",       PlaceholderType.LONG_TEXT, "list", "行业情况", "B2"));
+        reg.add(new RegistryEntry("清单模板-行业情况-B3", "行业竞争情况",       PlaceholderType.LONG_TEXT, "list", "行业情况", "B3"));
+        reg.add(new RegistryEntry("清单模板-行业情况-B4", "行业政策情况及未来趋势", PlaceholderType.LONG_TEXT, "list", "行业情况", "B4"));
+        reg.add(new RegistryEntry("清单模板-行业情况-B5", "行业小结",           PlaceholderType.LONG_TEXT, "list", "行业情况", "B5"));
 
         // ===== 第四类：BVD 数据占位符（BVD Excel 按坐标读取，全部标 uncertain） =====
         // 来源：BVD Excel 各 Sheet
@@ -264,12 +333,14 @@ public class ReverseTemplateEngine {
         reg.add(new RegistryEntry("BVD数据模板-数据表-B2",                "BVD-上四分位值",      PlaceholderType.BVD, "bvd", "数据表", "B2"));
         reg.add(new RegistryEntry("BVD数据模板-数据表-B3",                "BVD-中位值",          PlaceholderType.BVD, "bvd", "数据表", "B3"));
         reg.add(new RegistryEntry("BVD数据模板-数据表-B4",                "BVD-下四分位值",      PlaceholderType.BVD, "bvd", "数据表", "B4"));
-        reg.add(new RegistryEntry("BVD数据模板-AP_YEAR",                 "BVD-AP年度",        PlaceholderType.BVD, "bvd", "AP YEAR",          "A1"));
-        reg.add(new RegistryEntry("BVD数据模板-AP_Lead_Sheet_YEAR-13-19", "BVD-AP Lead 13~19行", PlaceholderType.BVD, "bvd", "AP Lead Sheet YEAR", "A13"));
+        reg.add(new RegistryEntry("BVD数据模板-AP_YEAR",                 "BVD-AP YEAR",     PlaceholderType.BVD, "bvd", "AP YEAR",          "A1"));
+        reg.add(new RegistryEntry("BVD数据模板-AP_Lead_Sheet_YEAR-13-19", "BVD-AP Lead",     PlaceholderType.BVD, "bvd", "AP Lead Sheet YEAR", "A13"));
         reg.add(new RegistryEntry("BVD数据模板-SummaryYear-第一张表格",   "BVD-SummaryYear可比公司列表",
                 PlaceholderType.TABLE_ROW_TEMPLATE, "bvd", "SummaryYear", null,
                 List.of("可比公司列表", "可比公司", "Comparable Companies", "Comparable Company"),
-                List.of("#", "COMPANY")));
+                List.of("#", "COMPANY"),
+                List.of("#", "COMPANY", "FY2023_STATUS", "FY2022_STATUS", "NCP_CURRENT", "NCP_PRIOR",
+                        "Remarks", "Sales", "CoGS", "SGA", "Depreciation", "OP")));
         // SummaryYear 第二张统计区：五分位数值，行号因企业可比公司数量不同而动态变化
         // 使用 D_KEYWORD:xxx 格式动态扫描 D 列关键词定位行，取 E 列值
         reg.add(new RegistryEntry("BVD数据模板-SummaryYear-MIN",          "BVD-SummaryYear最低值", PlaceholderType.BVD, "bvd", "SummaryYear", "D_KEYWORD:MIN"));
@@ -420,6 +491,12 @@ public class ReverseTemplateEngine {
          * 其他类型为 null。
          */
         private List<String> columnDefs;
+        /**
+         * TABLE_ROW_TEMPLATE 专用：全量可选列列表，来自注册表 RegistryEntry.availableColDefs。
+         * 用于 inferColumnDefsFromWordTable 第二级精确匹配（清单类中文列头识别）。
+         * 为 null 时回退到 columnDefs。
+         */
+        private List<String> availableColDefs;
     }
 
     /** 待确认的占位符项（返回给前端供人工确认） */
@@ -968,6 +1045,7 @@ public class ReverseTemplateEngine {
                 entry.setTitleKeywords(reg.getTitleKeywords());
                 entry.setColumnDefs(reg.getColumnDefs() != null ? reg.getColumnDefs()
                         : List.of("#", "COMPANY"));
+                entry.setAvailableColDefs(reg.getAvailableColDefs());
                 bvdTableRowEntries.add(entry);
                 log.debug("[ReverseEngine-BVD] TABLE_ROW_TEMPLATE 条目已加入：占位符='{}'", reg.getPlaceholderName());
                 continue;
@@ -1973,9 +2051,12 @@ public class ReverseTemplateEngine {
                 }
 
                 // ===== 方案A：列头自动识别 =====
-                // 扫描 Word 表格第0行（表头行）的列头文字，按 BVD_COLUMN_KEYWORD_MAP 映射为 fieldKey
-                // 成功则覆盖 entry.columnDefs；失败则回退到注册表 columnDefs
-                List<String> inferredColDefs = inferColumnDefsFromWordTable(targetTable, entry.getColumnDefs());
+                // 扫描 Word 表格第0行（表头行）的列头文字，按三级降级链推断 column_defs：
+                // 1) BVD_COLUMN_KEYWORD_MAP 英文关键词匹配（适用于 BVD 类）
+                // 2) availableColDefs 直接精确匹配（适用于清单类中文列头）
+                // 3) fallback：回退到注册表默认 columnDefs
+                List<String> inferredColDefs = inferColumnDefsFromWordTable(
+                        targetTable, entry.getColumnDefs(), entry.getAvailableColDefs());
                 if (!inferredColDefs.equals(entry.getColumnDefs())) {
                     log.info("[ReverseEngine-BVD-TableRow] 占位符 '{}' 列头自动识别结果：{} → 覆盖注册表默认值 {}",
                             entry.getPlaceholderName(), inferredColDefs, entry.getColumnDefs());
@@ -2210,11 +2291,13 @@ public class ReverseTemplateEngine {
      * </ol>
      * </p>
      *
-     * @param table    Word 表格
-     * @param fallback 匹配失败时的默认 column_defs（来自注册表）
+     * @param table             Word 表格
+     * @param fallback          匹配失败时的默认 column_defs（来自注册表）
+     * @param availableColDefs  注册表全量可选列（TABLE_ROW_TEMPLATE 专用，清单类中文字段名直接匹配用）
      * @return 推断得到的 column_defs 列表（可能包含 null 占位），失败时返回 fallback
      */
-    private List<String> inferColumnDefsFromWordTable(XWPFTable table, List<String> fallback) {
+    private List<String> inferColumnDefsFromWordTable(XWPFTable table, List<String> fallback,
+                                                       List<String> availableColDefs) {
         if (table == null || table.getRows().isEmpty()) {
             return fallback != null ? fallback : List.of("#", "COMPANY");
         }
@@ -2225,6 +2308,7 @@ public class ReverseTemplateEngine {
             return fallback != null ? fallback : List.of("#", "COMPANY");
         }
 
+        // ===== 第一级：BVD 关键词匹配（适用于 BVD 英文列头） =====
         List<String> inferred = new ArrayList<>();
         int matchCount = 0;
 
@@ -2246,15 +2330,55 @@ public class ReverseTemplateEngine {
             if (matchedField != null) matchCount++;
         }
 
-        if (matchCount == 0) {
-            log.debug("[ReverseEngine-BVD-ColInfer] 表格列头全部无法匹配，回退到注册表默认 columnDefs: {}", fallback);
-            return fallback != null ? fallback : List.of("#", "COMPANY");
+        if (matchCount > 0) {
+            log.debug("[ReverseEngine-ColInfer] 第一级(BVD关键词)推断结果（{}列命中/{}列总计）：{}",
+                    matchCount, headerCells.size(), inferred);
+            return inferred;
         }
 
-        // 过滤掉末尾连续的 null（表示表格有更多列但注册表无配置，保留不影响）
-        log.debug("[ReverseEngine-BVD-ColInfer] 列头自动推断结果（{}列命中/{}列总计）：{}",
-                matchCount, headerCells.size(), inferred);
-        return inferred;
+        // ===== 第二级：availableColDefs 直接精确匹配（适用于清单类中文列头） =====
+        if (availableColDefs != null && !availableColDefs.isEmpty()) {
+            List<String> inferredByAvail = new ArrayList<>();
+            int matchCount2 = 0;
+
+            for (XWPFTableCell cell : headerCells) {
+                String cellText = cell.getText();
+                if (cellText == null) {
+                    inferredByAvail.add(null);
+                    continue;
+                }
+                String trimmed = cellText.trim();
+                String matchedField = null;
+
+                for (String fieldKey : availableColDefs) {
+                    if (fieldKey == null) continue;
+                    // 三步精确度递减：equals → cellText contains fieldKey → fieldKey contains cellText
+                    if (trimmed.equals(fieldKey)) {
+                        matchedField = fieldKey;
+                        break;
+                    } else if (trimmed.contains(fieldKey)) {
+                        matchedField = fieldKey;
+                        break;
+                    } else if (fieldKey.contains(trimmed) && !trimmed.isEmpty()) {
+                        matchedField = fieldKey;
+                        break;
+                    }
+                }
+                inferredByAvail.add(matchedField);
+                if (matchedField != null) matchCount2++;
+            }
+
+            if (matchCount2 > 0) {
+                log.info("[ReverseEngine-ColInfer] 第二级(availableColDefs精确匹配)推断结果（{}列命中/{}列总计）：{}",
+                        matchCount2, headerCells.size(), inferredByAvail);
+                return inferredByAvail;
+            }
+            log.debug("[ReverseEngine-ColInfer] 第二级(availableColDefs)匹配全部失败，继续降级");
+        }
+
+        // ===== 第三级：fallback =====
+        log.debug("[ReverseEngine-ColInfer] 两级匹配均失败，回退到注册表默认 columnDefs: {}", fallback);
+        return fallback != null ? fallback : List.of("#", "COMPANY");
     }
 
     /**

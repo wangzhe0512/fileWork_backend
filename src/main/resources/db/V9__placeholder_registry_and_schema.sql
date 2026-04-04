@@ -69,46 +69,52 @@ SELECT UUID(), 'system', '清单模板-PL含特殊因素调整', 'PL含特殊因
 
 -- TABLE_CLEAR_FULL（非财务整表）
 SELECT UUID(), 'system', '清单模板-1_组织结构及管理架构',      '组织结构',     'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["组织结构","部门结构","管理架构","组织架构"]',                NULL, 120, 1, 0 UNION ALL
-SELECT UUID(), 'system', '清单模板-主要产品-A列中所列所有产品', '主要产品',     'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["主要产品","产品清单","产品信息","产品列表"]',                NULL, 130, 1, 0 UNION ALL
+SELECT UUID(), 'system', '清单模板-主要产品',                   '主要产品',     'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["主要产品","产品清单","产品信息","产品列表"]',                NULL, 130, 1, 0 UNION ALL
 SELECT UUID(), 'system', '清单模板-2_关联公司信息',             '关联公司信息', 'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["关联公司","关联方公司","关联企业"]',                         NULL, 140, 1, 0 UNION ALL
 SELECT UUID(), 'system', '清单模板-关联方个人信息',             '关联方个人信息','TABLE_CLEAR_FULL', 'list', NULL, NULL, '["关联方个人","关联个人","个人信息"]',                        NULL, 150, 1, 0 UNION ALL
 SELECT UUID(), 'system', '清单模板-关联关系变化情况',           '关联关系变化', 'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["关联关系变化","关联变化","关系变化"]',                       NULL, 160, 1, 0 UNION ALL
 SELECT UUID(), 'system', '清单模板-关联交易汇总表',             '关联交易汇总', 'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["关联交易汇总","关联交易总","关联交易合计"]',                 NULL, 170, 1, 0 UNION ALL
 
 -- TABLE_ROW_TEMPLATE（动态行数明细表，需在对应 TABLE_CLEAR_FULL 之前注册）
-SELECT UUID(), 'system', '清单模板-4_供应商关联采购明细', '关联采购明细',
+SELECT UUID(), 'system', '清单模板-4_供应商清单-关联采购明细', '关联采购明细',
     'TABLE_ROW_TEMPLATE', 'list', '4 供应商清单', NULL,
     '["关联采购交易明细","关联采购明细表","采购交易明细表"]',
     '["供应商名称","金额（人民币）","占关联采购总金额比例"]',
     180, 1, 0 UNION ALL
-SELECT UUID(), 'system', '清单模板-5_客户关联销售明细', '关联销售明细',
+SELECT UUID(), 'system', '清单模板-5_客户清单-关联销售明细', '关联销售明细',
     'TABLE_ROW_TEMPLATE', 'list', '5 客户清单', NULL,
     '["关联销售交易明细","关联销售明细表","销售交易明细表"]',
     '["客户名称","金额（人民币）","占营业收入比例"]',
     190, 1, 0 UNION ALL
 
 SELECT UUID(), 'system', '清单模板-5_客户清单',   '客户清单',   'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["客户清单","主要客户","前五大客户","主要客户情况"]',                  NULL, 200, 1, 0 UNION ALL
-SELECT UUID(), 'system', '清单模板-4_供应商清单', '供应商清单', 'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["供应商清单","主要供应商","前五大供应商","供应商情况"]',               NULL, 210, 1, 0 UNION ALL
+-- [DEPRECATED] 清单模板-4_供应商清单（TABLE_CLEAR_FULL，sourceSheet=null，生成引擎无填充逻辑，暂时废弃）
+-- SELECT UUID(), 'system', '清单模板-4_供应商清单', '供应商清单', 'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["供应商清单","主要供应商","前五大供应商","供应商情况"]', NULL, 210, 1, 0 UNION ALL
 
 -- TABLE_ROW_TEMPLATE（劳务支出/收入明细）
-SELECT UUID(), 'system', '清单模板-6_劳务支出明细', '接受关联劳务明细',
+SELECT UUID(), 'system', '清单模板-6_劳务交易表-劳务支出明细', '接受关联劳务明细',
     'TABLE_ROW_TEMPLATE', 'list', '6 劳务交易表', NULL,
     '["接受关联劳务明细","关联劳务支出明细","劳务支出明细表"]',
     '["关联方名称","交易金额","占总经营成本费用比重（%）"]',
     220, 1, 0 UNION ALL
-SELECT UUID(), 'system', '清单模板-6_劳务收入明细', '提供关联劳务明细',
+SELECT UUID(), 'system', '清单模板-6_劳务交易表-劳务收入明细', '提供关联劳务明细',
     'TABLE_ROW_TEMPLATE', 'list', '6 劳务交易表', NULL,
     '["提供关联劳务明细","关联劳务收入明细","劳务收入明细表"]',
     '["关联方名称","交易金额","占营业收入比重（%）"]',
     230, 1, 0 UNION ALL
 
-SELECT UUID(), 'system', '清单模板-劳务成本费用归集',          '劳务成本费用',   'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["劳务成本","费用归集","成本归集"]',                          NULL, 240, 1, 0 UNION ALL
-SELECT UUID(), 'system', '清单模板-资金融通',                  '资金融通',       'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["资金融通","资金借贷","融通"]',                              NULL, 250, 1, 0 UNION ALL
-SELECT UUID(), 'system', '清单模板-有形资产信息',              '有形资产信息',   'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["有形资产","固定资产","资产信息"]',                          NULL, 260, 1, 0 UNION ALL
-SELECT UUID(), 'system', '清单模板-功能风险汇总表',            '功能风险汇总',   'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["功能风险","功能分析","风险汇总","功能与风险"]',              NULL, 270, 1, 0 UNION ALL
+-- [DEPRECATED→V25] 清单模板-劳务成本费用归集 已在 V25 中升级为 TABLE_ROW_TEMPLATE 并重命名为 清单模板-劳务成本归集
+-- SELECT UUID(), 'system', '清单模板-劳务成本费用归集', '劳务成本费用', 'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["劳务成本","费用归集","成本归集"]', NULL, 240, 1, 0 UNION ALL
+-- [DEPRECATED→V26] 清单模板-资金融通 已在 V26 中升级为 TABLE_ROW_TEMPLATE，绑定 sheet_name=资金融通
+-- SELECT UUID(), 'system', '清单模板-资金融通', '资金融通', 'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["资金融通","资金借贷","融通"]', NULL, 250, 1, 0 UNION ALL
+-- [DEPRECATED→V28] 清单模板-有形资产信息 已在 V28 中升级为 TABLE_ROW_TEMPLATE，绑定 sheet_name=有形资产信息
+-- SELECT UUID(), 'system', '清单模板-有形资产信息',              '有形资产信息',   'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["有形资产","固定资产","资产信息"]',                          NULL, 260, 1, 0 UNION ALL
+-- [DEPRECATED→V29] 清单模板-功能风险汇总表 已在 V29 中升级为 TABLE_ROW_TEMPLATE，绑定 sheet_name=功能风险汇总表
+-- SELECT UUID(), 'system', '清单模板-功能风险汇总表',            '功能风险汇总',   'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["功能风险","功能分析","风险汇总","功能与风险"]',              NULL, 270, 1, 0 UNION ALL
 SELECT UUID(), 'system', '清单模板-3_分部财务数据',            '分部财务数据',   'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["分部财务","分部数据","分部财务数据"]',                      NULL, 280, 1, 0 UNION ALL
 SELECT UUID(), 'system', '清单模板-公司经营背景资料',          '公司经营背景',   'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["经营背景","公司背景","背景资料","经营情况"]',                NULL, 290, 1, 0 UNION ALL
-SELECT UUID(), 'system', '清单数据模板-公司间资金融通交易总结', '公司间资金融通', 'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["公司间资金","资金融通交易总结","公司间融通","资金融通总结"]', NULL, 300, 1, 0 UNION ALL
+-- [DEPRECATED→V27] 清单模板-公司间资金融通 已在 V27 中升级为 TABLE_ROW_TEMPLATE，绑定 sheet_name=公司间资金融通交易总结
+-- SELECT UUID(), 'system', '清单模板-公司间资金融通', '公司间资金融通', 'TABLE_CLEAR_FULL', 'list', NULL, NULL, '["公司间资金","资金融通交易总结","公司间融通","资金融通总结"]', NULL, 300, 1, 0 UNION ALL
 
 -- ===== 第三类：行业情况长文本占位符（清单 → 行业情况 Sheet B1~B5） =====
 SELECT UUID(), 'system', '清单模板-行业情况-B1', '行业情况B1', 'LONG_TEXT', 'list', '行业情况', 'B1', NULL, NULL, 310, 1, 0 UNION ALL

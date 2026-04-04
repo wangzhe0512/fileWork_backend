@@ -60,8 +60,17 @@ public class PlaceholderRegistry {
     /** JSON 数组，TABLE_CLEAR 系列专用，前置标题关键词列表 */
     private String titleKeywords;
 
-    /** JSON 数组，TABLE_ROW_TEMPLATE 专用，列字段名列表 */
+    /** JSON 数组，TABLE_ROW_TEMPLATE 专用，列字段名列表（默认选中列） */
     private String columnDefs;
+
+    /**
+     * JSON 数组，TABLE_ROW_TEMPLATE 专用，全量可选列字段名列表（前端列选择器数据源）。
+     * <p>
+     * 为空时 fallback 到 {@link #columnDefs}（向后兼容）。
+     * 企业级覆盖条目不复制此字段，始终以系统级为准。
+     * </p>
+     */
+    private String availableColDefs;
 
     /** 排序号，影响引擎处理顺序 */
     private Integer sort;

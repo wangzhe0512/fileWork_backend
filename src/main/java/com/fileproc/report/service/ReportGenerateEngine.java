@@ -20,6 +20,7 @@ import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * 报告生成核心引擎
@@ -79,9 +80,14 @@ public class ReportGenerateEngine {
         // 用于 TABLE_ROW_TEMPLATE 类型，fillTableByRowTemplateMapped 按字段名填值
         Map<String, List<Map<String, Object>>> rowTemplateValues = new LinkedHashMap<>();
 
-        // 行模板类型 Sheet 名集合（用于路由到 extractRowTemplateData）
-        // "6 劳务交易表" 同时对应劳务支出和收入两个占位符，由 extractRowTemplateData 内部按占位符名区分
-        Set<String> rowTemplateSheets = Set.of("4 供应商清单", "5 客户清单", "6 劳务交易表");
+        // 行模板类型 Sheet 名集合：从当前占位符列表动态推断，无需硬编码
+        // 凡是 type=table + dataSource=list 的占位符，其 sourceSheet 即为行模板路径的 Sheet 名
+        // BVD SummaryYear 已由上方独立 if 分支处理，dataSource=list 条件天然将其排除
+        Set<String> rowTemplateSheets = placeholders.stream()
+                .filter(ph -> "table".equals(ph.getType()) && "list".equals(ph.getDataSource())
+                        && ph.getSourceSheet() != null)
+                .map(Placeholder::getSourceSheet)
+                .collect(Collectors.toSet());
 
         for (Placeholder ph : placeholders) {
             String dataSource = ph.getDataSource(); // list / bvd
@@ -354,6 +360,61 @@ public class ReportGenerateEngine {
             return extractLaborServiceData(rows, placeholderName);
         }
 
+        // ===== 关联公司信息专用路径 =====
+        if ("2 关联公司信息".equals(sheetName)) {
+            return extractRelatedCompanyData(rows);
+        }
+
+        // ===== 组织结构及管理架构专用路径 =====
+        if ("1 组织结构及管理架构".equals(sheetName)) {
+            return extractOrgStructureData(rows);
+        }
+
+        // ===== 关联方个人信息专用路径 =====
+        if ("关联方个人信息".equals(sheetName)) {
+            return extractRelatedPersonData(rows);
+        }
+
+        // ===== 关联关系变化情况专用路径 =====
+        if ("关联关系变化情况".equals(sheetName)) {
+            return extractRelationChangeData(rows);
+        }
+
+        // ===== 关联交易汇总表专用路径 =====
+        if ("关联交易汇总表".equals(sheetName)) {
+            return extractRelatedTransactionSummaryData(rows);
+        }
+
+        // ===== 劳务成本归集专用路径 =====
+        if ("劳务成本归集".equals(sheetName)) {
+            return extractLaborCostData(rows);
+        }
+
+        // ===== 资金融通专用路径 =====
+        if ("资金融通".equals(sheetName)) {
+            return extractFundTransferData(rows);
+        }
+
+        // ===== 公司间资金融通专用路径 =====
+        if ("公司间资金融通交易总结".equals(sheetName)) {
+            return extractInterCompanyFundData(rows);
+        }
+
+        // ===== 有形资产信息专用路径 =====
+        if ("有形资产信息".equals(sheetName)) {
+            return extractTangibleAssetData(rows);
+        }
+
+        // ===== 功能风险汇总表专用路径 =====
+        if ("功能风险汇总表".equals(sheetName)) {
+            return extractFuncRiskData(rows);
+        }
+
+        // ===== 主要产品专用路径 =====
+        if ("主要产品".equals(sheetName)) {
+            return extractMainProductData(rows);
+        }
+
         // ===== 供应商/客户清单原有逻辑 =====
         if (rows.size() < 9) {
             log.warn("[ReportEngine-RowTpl] Sheet '{}' 行数不足，无法提取行模板数据", sheetName);
@@ -492,6 +553,270 @@ public class ReportGenerateEngine {
     }
 
     /**
+     * 组织结构及管理架构表（1 组织结构及管理架构）专用行模板数据提取。
+     * <p>
+     * Excel 结构（0-based行索引）：
+     * <ul>
+     *   <li>行0-4（index=0-4）：公司名/说明文字/空行/说明/提示（跳过）</li>
+     *   <li>行5（index=5）：表头行（主要部门、人数、主要职责范围、汇报对象、汇报对象主要办公所在地）</li>
+     *   <li>行6（index=6）起：数据行，col0（主要部门列）字符串非空则为有效数据行</li>
+     * </ul>
+     * 注意：col0 为部门名称（字符串），与关联公司信息的行次（数字）不同。
+     * </p>
+     *
+     * @param rows EasyExcel 读取的行数据（行索引从0开始）
+     * @return 数据行列表，每行为 Map&lt;字段名, 值&gt;
+     */
+    private List<Map<String, Object>> extractOrgStructureData(List<Map<Integer, Object>> rows) {
+        if (rows.size() < 7) {
+            log.warn("[ReportEngine-RowTpl] Sheet '1 组织结构及管理架构' 行数不足，无法提取行模板数据");
+            return Collections.emptyList();
+        }
+
+        // 1. 解析行5（0-based index=5）为表头行，构建 colIdx→字段名 Map
+        Map<Integer, String> colNameMap = new LinkedHashMap<>();
+        Map<Integer, Object> headerRow = rows.get(5);
+        for (Map.Entry<Integer, Object> entry : headerRow.entrySet()) {
+            String colName = entry.getValue() != null ? entry.getValue().toString().trim() : "";
+            if (!colName.isEmpty()) {
+                colNameMap.put(entry.getKey(), colName);
+            }
+        }
+        log.debug("[ReportEngine-RowTpl] Sheet '1 组织结构及管理架构' 表头解析：{}", colNameMap);
+
+        // 2. 从行6（0-based index=6）起扫描数据行，col0（主要部门列）非空则为有效数据行
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (int i = 6; i < rows.size(); i++) {
+            Map<Integer, Object> row = rows.get(i);
+            Object col0 = row.get(0);
+            if (col0 == null || col0.toString().trim().isEmpty()) {
+                continue; // 部门名称为空，跳过
+            }
+            // 按 colNameMap 提取所有列，输出字段名→值的 Map
+            Map<String, Object> rowMap = new LinkedHashMap<>();
+            for (Map.Entry<Integer, String> colEntry : colNameMap.entrySet()) {
+                Object val = row.get(colEntry.getKey());
+                rowMap.put(colEntry.getValue(), val != null ? val.toString().trim() : "");
+            }
+            result.add(rowMap);
+        }
+        log.debug("[ReportEngine-RowTpl] Sheet '1 组织结构及管理架构' 数据提取完成，共 {} 行", result.size());
+        return result;
+    }
+
+    /**
+     * 关联公司信息表（2 关联公司信息）专用行模板数据提取。
+     * <p>
+     * Excel 结构（0-based行索引）：
+     * <ul>
+     *   <li>行0-3（index=0-3）：说明/提示文字（跳过）</li>
+     *   <li>行4（index=4）：表头行（行次、关联方名称、关联方类型、国家（地区）等）</li>
+     *   <li>行5（index=5）：列序号辅助行（col0="1", col1="2"...，非真实数据，需跳过）</li>
+     *   <li>行6（index=6）起：真实数据行，col0（行次）非空且col1（关联方名称）非空为有效数据行</li>
+     * </ul>
+     * 双重条件校验（col0 非空 且 col1 非空）可准确跳过列序号辅助行。
+     * </p>
+     *
+     * @param rows EasyExcel 读取的行数据（行索引从0开始）
+     * @return 数据行列表，每行为 Map&lt;字段名, 值&gt;
+     */
+    private List<Map<String, Object>> extractRelatedCompanyData(List<Map<Integer, Object>> rows) {
+        if (rows.size() < 7) {
+            log.warn("[ReportEngine-RowTpl] Sheet '2 关联公司信息' 行数不足，无法提取行模板数据");
+            return Collections.emptyList();
+        }
+
+        // 1. 解析行4（0-based index=4）为表头行，构建 colIdx→字段名 Map
+        Map<Integer, String> colNameMap = new LinkedHashMap<>();
+        Map<Integer, Object> headerRow = rows.get(4);
+        for (Map.Entry<Integer, Object> entry : headerRow.entrySet()) {
+            String colName = entry.getValue() != null ? entry.getValue().toString().trim() : "";
+            if (!colName.isEmpty()) {
+                colNameMap.put(entry.getKey(), colName);
+            }
+        }
+        log.debug("[ReportEngine-RowTpl] Sheet '2 关联公司信息' 表头解析：{}", colNameMap);
+
+        // 2. 从行5（0-based index=5）起扫描数据行
+        //    双重条件：col0（行次）非空 且 col1（关联方名称）非空字符串，才为有效数据行
+        //    行5（index=5）为列序号辅助行（col0="1",col1="2"...），col1为纯数字，会被双重条件准确跳过
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (int i = 5; i < rows.size(); i++) {
+            Map<Integer, Object> row = rows.get(i);
+            Object col0 = row.get(0);
+            Object col1 = row.get(1);
+            String col0Str = col0 != null ? col0.toString().trim() : "";
+            String col1Str = col1 != null ? col1.toString().trim() : "";
+            // 双重校验：行次非空 且 关联方名称非空（跳过辅助序号行及空白行）
+            if (col0Str.isEmpty() || col1Str.isEmpty()) {
+                continue;
+            }
+            // 按 colNameMap 提取所有列，输出字段名→值的 Map
+            Map<String, Object> rowMap = new LinkedHashMap<>();
+            for (Map.Entry<Integer, String> colEntry : colNameMap.entrySet()) {
+                Object val = row.get(colEntry.getKey());
+                rowMap.put(colEntry.getValue(), val != null ? val.toString().trim() : "");
+            }
+            result.add(rowMap);
+        }
+        log.debug("[ReportEngine-RowTpl] Sheet '2 关联公司信息' 数据提取完成，共 {} 行", result.size());
+        return result;
+    }
+
+    /**
+     * 关联方个人信息表（关联方个人信息）专用行模板数据提取。
+     * <p>
+     * Excel 结构（0-based行索引）：
+     * <ul>
+     *   <li>行0（index=0）：表头行（个人关联方、国籍、关联关系类型、居住地址）</li>
+     *   <li>行1（index=1）起：真实数据行，col0（个人关联方）非空为有效数据行</li>
+     * </ul>
+     * </p>
+     *
+     * @param rows EasyExcel 读取的行数据（行索引从0开始）
+     * @return 数据行列表，每行为 Map&lt;字段名, 值&gt;
+     */
+    private List<Map<String, Object>> extractRelatedPersonData(List<Map<Integer, Object>> rows) {
+        if (rows.size() < 2) {
+            log.warn("[ReportEngine-RowTpl] Sheet '关联方个人信息' 行数不足，无法提取行模板数据");
+            return Collections.emptyList();
+        }
+
+        // 1. 解析行0（0-based index=0）为表头行，构建 colIdx→字段名 Map
+        Map<Integer, String> colNameMap = new LinkedHashMap<>();
+        Map<Integer, Object> headerRow = rows.get(0);
+        for (Map.Entry<Integer, Object> entry : headerRow.entrySet()) {
+            String colName = entry.getValue() != null ? entry.getValue().toString().trim() : "";
+            if (!colName.isEmpty()) {
+                colNameMap.put(entry.getKey(), colName);
+            }
+        }
+        log.debug("[ReportEngine-RowTpl] Sheet '关联方个人信息' 表头解析：{}", colNameMap);
+
+        // 2. 从行1（0-based index=1）起扫描数据行，col0（个人关联方）非空则为有效数据行
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (int i = 1; i < rows.size(); i++) {
+            Map<Integer, Object> row = rows.get(i);
+            Object col0 = row.get(0);
+            if (col0 == null || col0.toString().trim().isEmpty()) {
+                continue;
+            }
+            Map<String, Object> rowMap = new LinkedHashMap<>();
+            for (Map.Entry<Integer, String> colEntry : colNameMap.entrySet()) {
+                Object val = row.get(colEntry.getKey());
+                rowMap.put(colEntry.getValue(), val != null ? val.toString().trim() : "");
+            }
+            result.add(rowMap);
+        }
+        log.debug("[ReportEngine-RowTpl] Sheet '关联方个人信息' 数据提取完成，共 {} 行", result.size());
+        return result;
+    }
+
+    /**
+     * 关联关系变化情况表（关联关系变化情况）专用行模板数据提取。
+     * <p>
+     * Excel 结构（0-based行索引）：
+     * <ul>
+     *   <li>行0（index=0）：表头行（关联方名称、国家/地区、关联关系类型、起止日期、变化原因）</li>
+     *   <li>行1（index=1）起：真实数据行，col0（关联方名称）非空为有效数据行</li>
+     * </ul>
+     * </p>
+     *
+     * @param rows EasyExcel 读取的行数据（行索引从0开始）
+     * @return 数据行列表，每行为 Map&lt;字段名, 值&gt;
+     */
+    private List<Map<String, Object>> extractRelationChangeData(List<Map<Integer, Object>> rows) {
+        if (rows.size() < 2) {
+            log.warn("[ReportEngine-RowTpl] Sheet '关联关系变化情况' 行数不足，无法提取行模板数据");
+            return Collections.emptyList();
+        }
+
+        // 1. 解析行0（0-based index=0）为表头行，构建 colIdx→字段名 Map
+        Map<Integer, String> colNameMap = new LinkedHashMap<>();
+        Map<Integer, Object> headerRow = rows.get(0);
+        for (Map.Entry<Integer, Object> entry : headerRow.entrySet()) {
+            String colName = entry.getValue() != null ? entry.getValue().toString().trim() : "";
+            if (!colName.isEmpty()) {
+                colNameMap.put(entry.getKey(), colName);
+            }
+        }
+        log.debug("[ReportEngine-RowTpl] Sheet '关联关系变化情况' 表头解析：{}", colNameMap);
+
+        // 2. 从行1（0-based index=1）起扫描数据行，col0（关联方名称）非空则为有效数据行
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (int i = 1; i < rows.size(); i++) {
+            Map<Integer, Object> row = rows.get(i);
+            Object col0 = row.get(0);
+            if (col0 == null || col0.toString().trim().isEmpty()) {
+                continue;
+            }
+            Map<String, Object> rowMap = new LinkedHashMap<>();
+            for (Map.Entry<Integer, String> colEntry : colNameMap.entrySet()) {
+                Object val = row.get(colEntry.getKey());
+                rowMap.put(colEntry.getValue(), val != null ? val.toString().trim() : "");
+            }
+            result.add(rowMap);
+        }
+        log.debug("[ReportEngine-RowTpl] Sheet '关联关系变化情况' 数据提取完成，共 {} 行", result.size());
+        return result;
+    }
+
+    /**
+     * 关联交易汇总表（关联交易汇总表）专用行模板数据提取。
+     * <p>
+     * Excel 结构（0-based行索引）：
+     * <ul>
+     *   <li>行0（index=0）：主表头（关联交易类型、境外交易金额、境内交易金额、交易总额）</li>
+     *   <li>行1（index=1）：副表头（空、A、B、C=A+B），需跳过</li>
+     *   <li>行2（index=2）起：真实数据行，col0（关联交易类型）非空且不等于"合计"为有效数据行</li>
+     * </ul>
+     * </p>
+     *
+     * @param rows EasyExcel 读取的行数据（行索引从0开始）
+     * @return 数据行列表，每行为 Map&lt;字段名, 值&gt;
+     */
+    private List<Map<String, Object>> extractRelatedTransactionSummaryData(List<Map<Integer, Object>> rows) {
+        if (rows.size() < 3) {
+            log.warn("[ReportEngine-RowTpl] Sheet '关联交易汇总表' 行数不足，无法提取行模板数据");
+            return Collections.emptyList();
+        }
+
+        // 1. 解析行0（0-based index=0）为主表头行，构建 colIdx→字段名 Map
+        Map<Integer, String> colNameMap = new LinkedHashMap<>();
+        Map<Integer, Object> headerRow = rows.get(0);
+        for (Map.Entry<Integer, Object> entry : headerRow.entrySet()) {
+            String colName = entry.getValue() != null ? entry.getValue().toString().trim() : "";
+            if (!colName.isEmpty()) {
+                colNameMap.put(entry.getKey(), colName);
+            }
+        }
+        log.debug("[ReportEngine-RowTpl] Sheet '关联交易汇总表' 表头解析：{}", colNameMap);
+
+        // 2. 从行2（0-based index=2）起扫描数据行，行1为副表头跳过
+        //    col0（关联交易类型）非空且不等于"合计"则为有效数据行
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (int i = 2; i < rows.size(); i++) {
+            Map<Integer, Object> row = rows.get(i);
+            Object col0 = row.get(0);
+            if (col0 == null || col0.toString().trim().isEmpty()) {
+                continue;
+            }
+            String col0Str = col0.toString().trim();
+            if ("合计".equals(col0Str)) {
+                continue;
+            }
+            Map<String, Object> rowMap = new LinkedHashMap<>();
+            for (Map.Entry<Integer, String> colEntry : colNameMap.entrySet()) {
+                Object val = row.get(colEntry.getKey());
+                rowMap.put(colEntry.getValue(), val != null ? val.toString().trim() : "");
+            }
+            result.add(rowMap);
+        }
+        log.debug("[ReportEngine-RowTpl] Sheet '关联交易汇总表' 数据提取完成，共 {} 行", result.size());
+        return result;
+    }
+
+    /**
      * 劳务交易表（6 劳务交易表）专用行模板数据提取。
      * <p>
      * Excel 结构（0-based行索引）：
@@ -590,6 +915,426 @@ public class ReportGenerateEngine {
         log.debug("[ReportEngine-Labor] placeholderName='{}' ({}), 提取数据行={}", placeholderName, isExpense ? "支出" : "收入", result.size());
         return result;
     }
+
+    /**
+     * 劳务成本归集 Sheet 专用行模板数据提取。
+     * <p>
+     * Excel 结构（0-based行索引）：
+     * <ul>
+     *   <li>行0（index=0）：表头行（劳务内容 | 分配方法 | 总成本费用 | 所需承担的比例）</li>
+     *   <li>行1起：数据行，无分组/小计/break逻辑，全部输出为 _rowType=data</li>
+     * </ul>
+     * </p>
+     *
+     * @param rows EasyExcel 读取的行数据
+     * @return 数据行列表
+     */
+    private List<Map<String, Object>> extractLaborCostData(List<Map<Integer, Object>> rows) {
+        if (rows.isEmpty()) {
+            log.warn("[ReportEngine-LaborCost] Sheet '劳务成本归集' 无数据行");
+            return Collections.emptyList();
+        }
+
+        // 行0：动态解析表头，构建 colIdx->字段名 Map
+        Map<Integer, String> colNameMap = new LinkedHashMap<>();
+        Map<Integer, Object> headerRow = rows.get(0);
+        for (Map.Entry<Integer, Object> entry : headerRow.entrySet()) {
+            String colName = entry.getValue() != null ? entry.getValue().toString().trim() : "";
+            if (!colName.isEmpty()) {
+                colNameMap.put(entry.getKey(), colName);
+            }
+        }
+        if (colNameMap.isEmpty()) {
+            log.warn("[ReportEngine-LaborCost] 表头行解析失败，无有效列名");
+            return Collections.emptyList();
+        }
+
+        List<Map<String, Object>> result = new ArrayList<>();
+
+        // 行1起：逐行提取数据
+        for (int i = 1; i < rows.size(); i++) {
+            Map<Integer, Object> row = rows.get(i);
+
+            // 判断是否为全空行
+            boolean allEmpty = colNameMap.keySet().stream()
+                    .allMatch(col -> row.get(col) == null || row.get(col).toString().trim().isEmpty());
+            if (allEmpty) continue;
+
+            Map<String, Object> map = new LinkedHashMap<>();
+            for (Map.Entry<Integer, String> colEntry : colNameMap.entrySet()) {
+                map.put(colEntry.getValue(), toPlainString(row.get(colEntry.getKey())));
+            }
+            map.put("_rowType", "data");
+            result.add(map);
+        }
+
+        log.debug("[ReportEngine-LaborCost] 提取数据行={}", result.size());
+        return result;
+    }
+
+    /**
+     * 提取"资金融通" Sheet 数据行（TABLE_ROW_TEMPLATE 专用）。
+     *
+     * <p>Sheet 结构：
+     * <ul>
+     *   <li>行0：表头（关联方 | 金额）</li>
+     *   <li>行1起：数据行；关联方列值含"合计"→subtotal；值为"没找到"→跳过；全空→跳过</li>
+     * </ul>
+     * </p>
+     *
+     * @param rows EasyExcel 读取的行数据
+     * @return 数据行列表
+     */
+    private List<Map<String, Object>> extractFundTransferData(List<Map<Integer, Object>> rows) {
+        if (rows.isEmpty()) {
+            log.warn("[ReportEngine-FundTransfer] Sheet '资金融通' 无数据行");
+            return Collections.emptyList();
+        }
+
+        // 行0：动态解析表头，构建 colIdx->字段名 Map
+        Map<Integer, String> colNameMap = new LinkedHashMap<>();
+        Map<Integer, Object> headerRow = rows.get(0);
+        for (Map.Entry<Integer, Object> entry : headerRow.entrySet()) {
+            String colName = entry.getValue() != null ? entry.getValue().toString().trim() : "";
+            if (!colName.isEmpty()) {
+                colNameMap.put(entry.getKey(), colName);
+            }
+        }
+        if (colNameMap.isEmpty()) {
+            log.warn("[ReportEngine-FundTransfer] 表头行解析失败，无有效列名");
+            return Collections.emptyList();
+        }
+
+        // 确定关联方列（第一列，用于判断合计/没找到）
+        Integer firstColIdx = colNameMap.keySet().stream().findFirst().orElse(0);
+
+        List<Map<String, Object>> result = new ArrayList<>();
+
+        // 行1起：逐行提取数据
+        for (int i = 1; i < rows.size(); i++) {
+            Map<Integer, Object> row = rows.get(i);
+
+            // 判断是否为全空行
+            boolean allEmpty = colNameMap.keySet().stream()
+                    .allMatch(col -> row.get(col) == null || row.get(col).toString().trim().isEmpty());
+            if (allEmpty) continue;
+
+            // 关联方列的值
+            Object firstCell = row.get(firstColIdx);
+            String firstCellStr = firstCell != null ? firstCell.toString().trim() : "";
+
+            // "没找到"行：跳过
+            if ("没找到".equals(firstCellStr)) {
+                log.debug("[ReportEngine-FundTransfer] 行{} 为'没找到'标记，跳过", i);
+                continue;
+            }
+
+            Map<String, Object> map = new LinkedHashMap<>();
+            for (Map.Entry<Integer, String> colEntry : colNameMap.entrySet()) {
+                map.put(colEntry.getValue(), toPlainString(row.get(colEntry.getKey())));
+            }
+
+            // 含"合计"→ subtotal，否则 data
+            String rowType = firstCellStr.contains("合计") ? "subtotal" : "data";
+            map.put("_rowType", rowType);
+            result.add(map);
+        }
+
+        log.debug("[ReportEngine-FundTransfer] 提取数据行={}", result.size());
+        return result;
+    }
+
+    /**
+     * 提取"公司间资金融通交易总结" Sheet 数据行（TABLE_ROW_TEMPLATE 专用）。
+     *
+     * <p>Sheet 结构：
+     * <ul>
+     *   <li>行0：主表头（缔约方|公司间资金融通交易性质|货币|本金|本金|到期期限|利率|利息收入/利息支出|利息收入/利息支出）</li>
+     *   <li>行1：副表头（本金列→"（原币）"/"（人民币）"，利息列同样拆分）</li>
+     *   <li>行2起：数据行；"没找到"行跳过；全空行跳过</li>
+     * </ul>
+     * </p>
+     *
+     * @param rows EasyExcel 读取的行数据
+     * @return 数据行列表
+     */
+    private List<Map<String, Object>> extractInterCompanyFundData(List<Map<Integer, Object>> rows) {
+        if (rows.size() < 2) {
+            log.warn("[ReportEngine-InterCompanyFund] Sheet '公司间资金融通交易总结' 行数不足，无法解析双行表头");
+            return Collections.emptyList();
+        }
+
+        // 行0+行1：合并构建 colIdx->字段名 Map
+        // 规则：若行1同列非空则 colName = 行0值 + 行1值，否则 colName = 行0值
+        Map<Integer, String> colNameMap = new LinkedHashMap<>();
+        Map<Integer, Object> headerRow0 = rows.get(0);
+        Map<Integer, Object> headerRow1 = rows.get(1);
+
+        // 先收集行0的所有列索引
+        for (Map.Entry<Integer, Object> entry : headerRow0.entrySet()) {
+            String h0 = entry.getValue() != null ? entry.getValue().toString().trim() : "";
+            if (h0.isEmpty()) continue;
+            Object h1Val = headerRow1.get(entry.getKey());
+            String h1 = h1Val != null ? h1Val.toString().trim() : "";
+            String colName = h1.isEmpty() ? h0 : h0 + h1;
+            colNameMap.put(entry.getKey(), colName);
+        }
+
+        if (colNameMap.isEmpty()) {
+            log.warn("[ReportEngine-InterCompanyFund] 表头解析失败，无有效列名");
+            return Collections.emptyList();
+        }
+        log.debug("[ReportEngine-InterCompanyFund] 合并双行表头：{}", colNameMap);
+
+        // 确定第一列（缔约方），用于判断"没找到"
+        Integer firstColIdx = colNameMap.keySet().stream().findFirst().orElse(0);
+
+        List<Map<String, Object>> result = new ArrayList<>();
+
+        // 行2起：逐行提取数据
+        for (int i = 2; i < rows.size(); i++) {
+            Map<Integer, Object> row = rows.get(i);
+
+            // 全空行跳过
+            boolean allEmpty = colNameMap.keySet().stream()
+                    .allMatch(col -> row.get(col) == null || row.get(col).toString().trim().isEmpty());
+            if (allEmpty) continue;
+
+            // "没找到"行跳过
+            Object firstCell = row.get(firstColIdx);
+            String firstCellStr = firstCell != null ? firstCell.toString().trim() : "";
+            if ("没找到".equals(firstCellStr)) {
+                log.debug("[ReportEngine-InterCompanyFund] 行{} 为'没找到'标记，跳过", i);
+                continue;
+            }
+
+            Map<String, Object> map = new LinkedHashMap<>();
+            for (Map.Entry<Integer, String> colEntry : colNameMap.entrySet()) {
+                map.put(colEntry.getValue(), toPlainString(row.get(colEntry.getKey())));
+            }
+            map.put("_rowType", "data");
+            result.add(map);
+        }
+
+        log.debug("[ReportEngine-InterCompanyFund] 提取数据行={}", result.size());
+        return result;
+    }
+
+    /**
+     * 提取"有形资产信息" Sheet 数据（单行表头，3列，合计行→subtotal）。
+     *
+     * <p>Sheet 结构：
+     * <ul>
+     *   <li>行0：表头（资产净值 | 年初数 | 年末数）</li>
+     *   <li>行1~N-1：数据行（各类资产）</li>
+     *   <li>含"合计"的行：_rowType=subtotal</li>
+     * </ul>
+     *
+     * @param rows EasyExcel 读取的行数据
+     * @return 数据行列表
+     */
+    private List<Map<String, Object>> extractTangibleAssetData(List<Map<Integer, Object>> rows) {
+        if (rows.isEmpty()) {
+            log.warn("[ReportEngine-TangibleAsset] Sheet '有形资产信息' 无数据行");
+            return Collections.emptyList();
+        }
+
+        // 1. 解析行0表头，构建 colIdx → 字段名 Map
+        Map<Integer, String> colNameMap = new LinkedHashMap<>();
+        Map<Integer, Object> headerRow = rows.get(0);
+        for (Map.Entry<Integer, Object> entry : headerRow.entrySet()) {
+            String col = entry.getValue() != null ? entry.getValue().toString().trim() : "";
+            if (!col.isEmpty()) {
+                colNameMap.put(entry.getKey(), col);
+            }
+        }
+
+        if (colNameMap.isEmpty()) {
+            log.warn("[ReportEngine-TangibleAsset] 表头解析失败，无有效列名");
+            return Collections.emptyList();
+        }
+        log.debug("[ReportEngine-TangibleAsset] 表头：{}", colNameMap);
+
+        // 确定第一列索引，用于判断"没找到"和"合计"
+        Integer firstColIdx = colNameMap.keySet().stream().findFirst().orElse(0);
+
+        List<Map<String, Object>> result = new ArrayList<>();
+
+        // 2. 行1起逐行提取数据
+        for (int i = 1; i < rows.size(); i++) {
+            Map<Integer, Object> row = rows.get(i);
+
+            // 全空行跳过
+            boolean allEmpty = colNameMap.keySet().stream()
+                    .allMatch(col -> row.get(col) == null || row.get(col).toString().trim().isEmpty());
+            if (allEmpty) continue;
+
+            // "没找到"行跳过
+            Object firstCell = row.get(firstColIdx);
+            String firstCellStr = firstCell != null ? firstCell.toString().trim() : "";
+            if ("没找到".equals(firstCellStr)) {
+                log.debug("[ReportEngine-TangibleAsset] 行{} 为'没找到'标记，跳过", i);
+                continue;
+            }
+
+            // 含"合计"→ subtotal，否则 data
+            String rowType = firstCellStr.contains("合计") ? "subtotal" : "data";
+
+            Map<String, Object> map = new LinkedHashMap<>();
+            for (Map.Entry<Integer, String> colEntry : colNameMap.entrySet()) {
+                map.put(colEntry.getValue(), toPlainString(row.get(colEntry.getKey())));
+            }
+            map.put("_rowType", rowType);
+            result.add(map);
+        }
+
+        log.debug("[ReportEngine-TangibleAsset] 提取数据行={}", result.size());
+        return result;
+    }
+
+    /**
+     * 提取"功能风险汇总表" Sheet 数据（单行表头，4列，无合计行，全部标记 data）。
+     *
+     * <p>Sheet 结构：
+     * <ul>
+     *   <li>行0：表头（序号 | 风险 | 【清单模板-数据表B5】 | 关联方）</li>
+     *   <li>行1起：数据行，_rowType=data</li>
+     *   <li>"没找到"标记行跳过，全空行跳过</li>
+     * </ul>
+     *
+     * @param rows EasyExcel 读取的行数据
+     * @return 数据行列表
+     */
+    private List<Map<String, Object>> extractFuncRiskData(List<Map<Integer, Object>> rows) {
+        if (rows.isEmpty()) {
+            log.warn("[ReportEngine-FuncRisk] Sheet '功能风险汇总表' 无数据行");
+            return Collections.emptyList();
+        }
+
+        // 1. 解析行0表头，构建 colIdx → 字段名 Map
+        Map<Integer, String> colNameMap = new LinkedHashMap<>();
+        Map<Integer, Object> headerRow = rows.get(0);
+        for (Map.Entry<Integer, Object> entry : headerRow.entrySet()) {
+            String col = entry.getValue() != null ? entry.getValue().toString().trim() : "";
+            if (!col.isEmpty()) {
+                colNameMap.put(entry.getKey(), col);
+            }
+        }
+
+        if (colNameMap.isEmpty()) {
+            log.warn("[ReportEngine-FuncRisk] 表头解析失败，无有效列名");
+            return Collections.emptyList();
+        }
+        log.debug("[ReportEngine-FuncRisk] 表头：{}", colNameMap);
+
+        // 确定第一列索引，用于判断"没找到"
+        Integer firstColIdx = colNameMap.keySet().stream().findFirst().orElse(0);
+
+        List<Map<String, Object>> result = new ArrayList<>();
+
+        // 2. 行1起逐行提取数据
+        for (int i = 1; i < rows.size(); i++) {
+            Map<Integer, Object> row = rows.get(i);
+
+            // 全空行跳过
+            boolean allEmpty = colNameMap.keySet().stream()
+                    .allMatch(col -> row.get(col) == null || row.get(col).toString().trim().isEmpty());
+            if (allEmpty) continue;
+
+            // "没找到"行跳过
+            Object firstCell = row.get(firstColIdx);
+            String firstCellStr = firstCell != null ? firstCell.toString().trim() : "";
+            if ("没找到".equals(firstCellStr)) {
+                log.debug("[ReportEngine-FuncRisk] 行{} 为'没找到'标记，跳过", i);
+                continue;
+            }
+
+            Map<String, Object> map = new LinkedHashMap<>();
+            for (Map.Entry<Integer, String> colEntry : colNameMap.entrySet()) {
+                map.put(colEntry.getValue(), toPlainString(row.get(colEntry.getKey())));
+            }
+            map.put("_rowType", "data");
+            result.add(map);
+        }
+
+        log.debug("[ReportEngine-FuncRisk] 提取数据行={}", result.size());
+        return result;
+    }
+
+    /**
+     * 提取"主要产品" Sheet 数据（单行表头，3列，含合计行→subtotal）。
+     *
+     * <p>Sheet 结构：
+     * <ul>
+     *   <li>行0：表头（产品 | 销售额（万元） | 占比(%)）</li>
+     *   <li>行1~N-1：数据行（各产品），_rowType=data</li>
+     *   <li>首列含"总计"/"合计"/"小计"的行：_rowType=subtotal</li>
+     *   <li>全空行及"没找到"标记行跳过</li>
+     * </ul>
+     *
+     * @param rows EasyExcel 读取的行数据
+     * @return 数据行列表
+     */
+    private List<Map<String, Object>> extractMainProductData(List<Map<Integer, Object>> rows) {
+        if (rows.isEmpty()) {
+            log.warn("[ReportEngine-MainProduct] Sheet '主要产品' 无数据行");
+            return Collections.emptyList();
+        }
+
+        // 1. 解析行0表头，构建 colIdx → 字段名 Map
+        Map<Integer, String> colNameMap = new LinkedHashMap<>();
+        Map<Integer, Object> headerRow = rows.get(0);
+        for (Map.Entry<Integer, Object> entry : headerRow.entrySet()) {
+            String col = entry.getValue() != null ? entry.getValue().toString().trim() : "";
+            if (!col.isEmpty()) {
+                colNameMap.put(entry.getKey(), col);
+            }
+        }
+
+        if (colNameMap.isEmpty()) {
+            log.warn("[ReportEngine-MainProduct] 表头解析失败，无有效列名");
+            return Collections.emptyList();
+        }
+        log.debug("[ReportEngine-MainProduct] 表头：{}", colNameMap);
+
+        // 确定第一列索引，用于判断"没找到"和合计行
+        Integer firstColIdx = colNameMap.keySet().stream().findFirst().orElse(0);
+
+        List<Map<String, Object>> result = new ArrayList<>();
+
+        // 2. 行1起逐行提取数据
+        for (int i = 1; i < rows.size(); i++) {
+            Map<Integer, Object> row = rows.get(i);
+
+            // 全空行跳过
+            boolean allEmpty = colNameMap.keySet().stream()
+                    .allMatch(col -> row.get(col) == null || row.get(col).toString().trim().isEmpty());
+            if (allEmpty) continue;
+
+            // "没找到"行跳过
+            Object firstCell = row.get(firstColIdx);
+            String firstCellStr = firstCell != null ? firstCell.toString().trim() : "";
+            if ("没找到".equals(firstCellStr)) {
+                log.debug("[ReportEngine-MainProduct] 行{} 为'没找到'标记，跳过", i);
+                continue;
+            }
+
+            // 首列含"总计"/"合计"/"小计" → subtotal，否则 data
+            String rowType = (firstCellStr.contains("总计") || firstCellStr.contains("合计") || firstCellStr.contains("小计"))
+                    ? "subtotal" : "data";
+
+            Map<String, Object> map = new LinkedHashMap<>();
+            for (Map.Entry<Integer, String> colEntry : colNameMap.entrySet()) {
+                map.put(colEntry.getValue(), toPlainString(row.get(colEntry.getKey())));
+            }
+            map.put("_rowType", rowType);
+            result.add(map);
+        }
+
+        log.debug("[ReportEngine-MainProduct] 提取数据行={}", result.size());
+        return result;
+    }
+
     private Map<String, Object> buildRowMap(String name, String amount, String ratio,
                                              Map<Integer, String> colNameMap,
                                              int nameColIdx, int amountColIdx, int ratioColIdx,

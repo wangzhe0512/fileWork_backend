@@ -216,6 +216,7 @@ public class PlaceholderRegistryService {
 
             List<String> titleKeywords = parseJsonList(db.getTitleKeywords());
             List<String> columnDefs = parseJsonList(db.getColumnDefs());
+            List<String> availableColDefs = parseJsonList(db.getAvailableColDefs());
 
             return new ReverseTemplateEngine.RegistryEntry(
                     db.getPlaceholderName(),
@@ -225,7 +226,8 @@ public class PlaceholderRegistryService {
                     db.getSheetName(),
                     db.getCellAddress(),
                     titleKeywords,
-                    columnDefs
+                    columnDefs,
+                    availableColDefs
             );
         } catch (Exception e) {
             log.warn("[RegistryService] 条目转换失败，跳过: id={}, name={}, error={}",
@@ -330,31 +332,23 @@ public class PlaceholderRegistryService {
             }
         }
 
-        // 内置已知列元数据（fieldKey / label / colIndex）
-        // 目前对应 BVD SummaryYear，后续可扩展为从注册表条目元数据字段读取
-        String[][] knownCols = {
-                {"#",             "#",              "0"},
-                {"COMPANY",       "COMPANY",        "1"},
-                {"FY2023_STATUS", "FY2023 Status",  "2"},
-                {"FY2022_STATUS", "FY2022 Status",  "3"},
-                {"NCP_CURRENT",   "2020-2022 NCP",  "4"},
-                {"NCP_PRIOR",     "2019-2021 NCP",  "5"},
-                {"Remarks",       "Remarks",        "6"},
-                {"Sales",         "Sales",          "7"},
-                {"CoGS",          "CoGS",           "8"},
-                {"SGA",           "SG&A",           "9"},
-                {"Depreciation",  "Depreciation",   "10"},
-                {"OP",            "OP",             "11"},
-        };
+        // 从系统级 available_col_defs 构建全量可选列（优先），为空时 fallback 到 column_defs（向后兼容）
+        // 通用：适用于任意 TABLE_ROW_TEMPLATE 占位符，无需为每个占位符硬编码列元数据
+        List<String> allCols = parseJsonList(system.getAvailableColDefs());
+        if (allCols == null || allCols.isEmpty()) {
+            allCols = parseJsonList(system.getColumnDefs());
+        }
+        if (allCols == null) allCols = Collections.emptyList();
 
         final List<String> finalEffectiveColDefs = effectiveColDefs;
         List<ColumnDefItem> result = new ArrayList<>();
-        for (String[] col : knownCols) {
+        for (int i = 0; i < allCols.size(); i++) {
+            String fieldKey = allCols.get(i);
             ColumnDefItem item = new ColumnDefItem();
-            item.setFieldKey(col[0]);
-            item.setLabel(col[1]);
-            item.setColIndex(Integer.parseInt(col[2]));
-            item.setSelected(finalEffectiveColDefs.contains(col[0]));
+            item.setFieldKey(fieldKey);
+            item.setLabel(fieldKey);
+            item.setColIndex(i);
+            item.setSelected(finalEffectiveColDefs.contains(fieldKey));
             result.add(item);
         }
         return result;
