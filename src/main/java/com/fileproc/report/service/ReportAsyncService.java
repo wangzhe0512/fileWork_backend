@@ -244,7 +244,9 @@ public class ReportAsyncService {
     private Placeholder toPlaceholder(SystemPlaceholder sp) {
         Placeholder ph = new Placeholder();
         ph.setId(sp.getId());
-        ph.setName(sp.getName());
+        // 使用displayName作为占位符名称，与模板中的占位符格式保持一致
+        ph.setName(sp.getDisplayName() != null && !sp.getDisplayName().isBlank() 
+                ? sp.getDisplayName() : sp.getName());
         ph.setType(sp.getType());
         ph.setDataSource(sp.getDataSource());
         ph.setSourceSheet(sp.getSourceSheet());

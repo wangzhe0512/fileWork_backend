@@ -65,6 +65,8 @@ public class CompanyTemplatePlaceholderService {
             CompanyTemplatePlaceholder ph = new CompanyTemplatePlaceholder();
             ph.setId(UUID.randomUUID().toString());
             ph.setCompanyTemplateId(companyTemplateId);
+            // 使用displayName作为name，与模板中的占位符格式保持一致
+            ph.setName(item.getPlaceholderName());
             ph.setPlaceholderName(item.getPlaceholderName());
             ph.setStatus("uncertain");
             ph.setExpectedValue(item.getExpectedValue());
@@ -422,6 +424,8 @@ public class CompanyTemplatePlaceholderService {
         Map<String, String> registryItemIdCache = new HashMap<>();
         // 查注册表可读展示名（缓存，与 levelCache 共享同一次查询结果）
         Map<String, String> displayNameCache = new HashMap<>();
+        // 查注册表标准名（缓存，与 levelCache 共享同一次查询结果）
+        Map<String, String> standardNameCache = new HashMap<>();
 
         return grouped.entrySet().stream().map(entry -> {
             String placeholderName = entry.getKey();
@@ -456,6 +460,8 @@ public class CompanyTemplatePlaceholderService {
                         phTypeCache.put(name, reg.getPhType());
                         registryItemIdCache.put(name, reg.getId());
                         displayNameCache.put(name, reg.getDisplayName());
+                        // 缓存标准名
+                        standardNameCache.put(name, reg.getPlaceholderName());
                         return reg.getLevel();
                     }
                     return "custom";
@@ -468,13 +474,15 @@ public class CompanyTemplatePlaceholderService {
             String cachedDisplayName = displayNameCache.get(placeholderName);
             String resolvedName = (cachedDisplayName != null && !cachedDisplayName.isBlank())
                     ? cachedDisplayName : first.getName();
+            // 获取标准名
+            String standardName = standardNameCache.get(placeholderName);
 
             return new PlaceholderGroupVO(
                     first.getId(),
                     first.getCompanyTemplateId(),
                     first.getModuleId(),
-                    placeholderName,
-                    resolvedName,
+                    resolvedName,           // name = 展示名
+                    standardName,           // standardName = 标准名
                     first.getType(),
                     first.getDataSource(),
                     first.getSourceSheet(),
@@ -713,8 +721,10 @@ public class CompanyTemplatePlaceholderService {
         private final String id;
         private final String companyTemplateId;
         private final String moduleId;
-        private final String placeholderName;
+        /** 占位符展示名（用于Word模板内容，如"企业名称"） */
         private final String name;
+        /** 占位符标准名（用于识别，如"清单模板-数据表-B1"） */
+        private final String standardName;
         private final String type;
         private final String dataSource;
         private final String sourceSheet;
@@ -733,7 +743,7 @@ public class CompanyTemplatePlaceholderService {
         private final List<CompanyTemplatePlaceholder> positions;
 
         public PlaceholderGroupVO(String id, String companyTemplateId, String moduleId,
-                                   String placeholderName, String name, String type,
+                                   String name, String standardName, String type,
                                    String dataSource, String sourceSheet, String sourceField,
                                    String description, Integer sort,
                                    String bindingStatus, String status,
@@ -744,8 +754,8 @@ public class CompanyTemplatePlaceholderService {
             this.id = id;
             this.companyTemplateId = companyTemplateId;
             this.moduleId = moduleId;
-            this.placeholderName = placeholderName;
-            this.name = name;
+            this.name = name; // 展示名
+            this.standardName = standardName; // 标准名
             this.type = type;
             this.dataSource = dataSource;
             this.sourceSheet = sourceSheet;
@@ -765,8 +775,10 @@ public class CompanyTemplatePlaceholderService {
         public String getId() { return id; }
         public String getCompanyTemplateId() { return companyTemplateId; }
         public String getModuleId() { return moduleId; }
-        public String getPlaceholderName() { return placeholderName; }
+        /** 获取占位符展示名（用于Word模板） */
         public String getName() { return name; }
+        /** 获取占位符标准名（用于识别） */
+        public String getStandardName() { return standardName; }
         public String getType() { return type; }
         public String getDataSource() { return dataSource; }
         public String getSourceSheet() { return sourceSheet; }

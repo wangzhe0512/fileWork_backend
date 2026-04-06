@@ -1433,7 +1433,8 @@ public class ReverseTemplateEngine {
 
                 String value = entry.getValue();
                 if (value == null || value.isBlank()) continue;
-                String phMark = "{{" + entry.getPlaceholderName() + "}}";
+                // 使用展示名生成占位符，提高可读性
+                String phMark = "{{" + entry.getDisplayName() + "}}";
                 if (text.contains(phMark)) continue;
                 if (!text.contains(value)) {
                     // 特例：年度字段（2位数字）允许通过变体检测放行
@@ -1939,7 +1940,8 @@ public class ReverseTemplateEngine {
 
         // ===== Phase 2：按条目查找对应表格 =====
         for (ExcelEntry entry : tableClearEntries) {
-            String phMark = "{{" + entry.getPlaceholderName() + "}}";
+            // 使用展示名生成占位符，提高可读性
+            String phMark = "{{" + entry.getDisplayName() + "}}";
             List<String> keywords = entry.getTitleKeywords();
 
             XWPFTable targetTable = null;
@@ -2600,7 +2602,7 @@ public class ReverseTemplateEngine {
                                    String expectedValue, String actualText, String location,
                                    String status, int paragraphIndex, int tableIndex, int rowIndex, int cellIndex) {
         MatchedPlaceholder matched = new MatchedPlaceholder();
-        matched.setPlaceholderName(entry.getPlaceholderName());
+        matched.setPlaceholderName(entry.getDisplayName()); // 使用展示名
         matched.setExpectedValue(expectedValue);
         matched.setActualValue(actualText);
         matched.setLocation(location);
