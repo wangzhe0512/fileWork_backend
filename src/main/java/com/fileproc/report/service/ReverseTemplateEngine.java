@@ -1166,6 +1166,13 @@ public class ReverseTemplateEngine {
             for (PendingConfirmItem item : confirmItems) {
                 if (!item.isConfirmed()) continue;
                 String value = item.getExpectedValue();
+                
+                // 如果 expectedValue 为空，跳过替换操作（保存草稿时可能不传此字段）
+                if (value == null || value.isEmpty()) {
+                    log.debug("[applyConfirmedPlaceholders] expectedValue为空，跳过替换: {}", item.getPlaceholderName());
+                    continue;
+                }
+                
                 String placeholderMark = "{{" + item.getPlaceholderName() + "}}";
 
                 // 在段落中替换
@@ -1241,15 +1248,18 @@ public class ReverseTemplateEngine {
             // 归一化后作为 key
             String normalized = normalizeNumber(cellValue);
 
+            // 使用displayName作为占位符名称（展示名），提高可读性
+            String displayName = ph.getDisplayName() != null && !ph.getDisplayName().isBlank()
+                    ? ph.getDisplayName() : ph.getName();
             if (result.containsKey(normalized)) {
                 log.warn("[ReverseEngine] 值冲突：归一化值 '{}' 同时对应占位符 '{}' 和 '{}'，保留首次匹配",
-                        normalized, result.get(normalized), ph.getName());
+                        normalized, result.get(normalized), displayName);
             } else {
-                result.put(normalized, ph.getName());
+                result.put(normalized, displayName);
             }
             // 同时存入原始值（不归一化）作为备用
             if (!result.containsKey(cellValue)) {
-                result.put(cellValue, ph.getName());
+                result.put(cellValue, displayName);
             }
         }
         return result;
@@ -1751,21 +1761,22 @@ public class ReverseTemplateEngine {
      */
     private int replaceBvdRangeTable(XWPFDocument doc, List<MatchedPlaceholder> matchedList) {
         // 数据表区间表：首列含"可比公司数量"，按行序写入 B1~B4（4行）
+        // 使用展示名作为占位符名称，提高可读性
         String[] dataTablePlaceholders = {
-            "BVD数据模板-数据表-B1",
-            "BVD数据模板-数据表-B2",
-            "BVD数据模板-数据表-B3",
-            "BVD数据模板-数据表-B4"
+            "BVD-可比公司数量",
+            "BVD-上四分位值",
+            "BVD-中位值",
+            "BVD-下四分位值"
         };
 
         // SummaryYear区间表：首列含"最高值"或"最低值"，按行标签关键词匹配写入 MIN/LQ/MED/UQ/MAX（5行）
-        // key=行标签关键词, value=[占位符名, SummaryYear动态定位格式]
+        // key=行标签关键词, value=[展示名, SummaryYear动态定位格式]
         java.util.Map<String, String[]> summaryYearRowMap = new java.util.LinkedHashMap<>();
-        summaryYearRowMap.put("最高值",    new String[]{"BVD数据模板-SummaryYear-MAX", "D_KEYWORD:MAX"});
-        summaryYearRowMap.put("上四分位值", new String[]{"BVD数据模板-SummaryYear-UQ",  "D_KEYWORD:UQ"});
-        summaryYearRowMap.put("中位值",    new String[]{"BVD数据模板-SummaryYear-MED", "D_KEYWORD:MED"});
-        summaryYearRowMap.put("下四分位值", new String[]{"BVD数据模板-SummaryYear-LQ",  "D_KEYWORD:LQ"});
-        summaryYearRowMap.put("最低值",    new String[]{"BVD数据模板-SummaryYear-MIN", "D_KEYWORD:MIN"});
+        summaryYearRowMap.put("最高值",    new String[]{"BVD-SummaryYear最高值", "D_KEYWORD:MAX"});
+        summaryYearRowMap.put("上四分位值", new String[]{"BVD-SummaryYear上四分位",  "D_KEYWORD:UQ"});
+        summaryYearRowMap.put("中位值",    new String[]{"BVD-SummaryYear中位值", "D_KEYWORD:MED"});
+        summaryYearRowMap.put("下四分位值", new String[]{"BVD-SummaryYear下四分位",  "D_KEYWORD:LQ"});
+        summaryYearRowMap.put("最低值",    new String[]{"BVD-SummaryYear最低值", "D_KEYWORD:MIN"});
 
         int count = 0;
         boolean dataTableDone = false;
@@ -2064,7 +2075,8 @@ public class ReverseTemplateEngine {
                             entry.getPlaceholderName(), inferredColDefs, entry.getColumnDefs());
                 }
 
-                String tplMark = "{{_tpl_" + entry.getPlaceholderName() + "}}";
+                // 使用displayName生成行模板标记，与生成引擎保持一致
+                String tplMark = "{{_tpl_" + entry.getDisplayName() + "}}";
                 List<String> colDefs = inferredColDefs;
 
                 // 辅助方法：写占位符文本到一行的各列
@@ -2262,7 +2274,8 @@ public class ReverseTemplateEngine {
 
             // 记录匹配
             MatchedPlaceholder mp = new MatchedPlaceholder();
-            mp.setPlaceholderName(entry.getPlaceholderName());
+            // 使用displayName作为占位符名称，与模板中的占位符格式保持一致
+            mp.setPlaceholderName(entry.getDisplayName());
             mp.setExpectedValue("[TABLE_CLEAR]");
             mp.setActualValue("[整表清空]");
             mp.setLocation("表格#" + targetIdx);
@@ -2832,12 +2845,15 @@ public class ReverseTemplateEngine {
 
         for (SystemPlaceholder ph : chartPhs) {
             // 为每个chart类型占位符，在第一个包含图表的段落前标注
+            // 使用displayName作为占位符名称（展示名），提高可读性
+            String displayName = ph.getDisplayName() != null && !ph.getDisplayName().isBlank()
+                    ? ph.getDisplayName() : ph.getName();
             // 简化实现：在文档末尾追加占位符映射注释（实际生产建议使用 CTDrawing 定位图表）
-            log.debug("[ReverseEngine] 图表占位符 {} 已标注（待人工确认图表位置）", ph.getName());
+            log.debug("[ReverseEngine] 图表占位符 {} 已标注（待人工确认图表位置）", displayName);
 
             // 加入待确认列表，由人工确认图表与占位符的对应关系
             PendingConfirmItem item = new PendingConfirmItem();
-            item.setPlaceholderName(ph.getName());
+            item.setPlaceholderName(displayName);
             item.setExpectedValue("[图表数据]");
             item.setLocation("图表占位符（需人工确认）");
             item.setReason("图表类型占位符需要人工确认与文档中图表的对应关系");

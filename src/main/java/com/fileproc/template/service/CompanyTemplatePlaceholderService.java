@@ -483,6 +483,7 @@ public class CompanyTemplatePlaceholderService {
                     first.getModuleId(),
                     resolvedName,           // name = 展示名
                     standardName,           // standardName = 标准名
+                    resolvedName,           // placeholderName = 占位符标记名（与展示名一致）
                     first.getType(),
                     first.getDataSource(),
                     first.getSourceSheet(),
@@ -725,6 +726,8 @@ public class CompanyTemplatePlaceholderService {
         private final String name;
         /** 占位符标准名（用于识别，如"清单模板-数据表-B1"） */
         private final String standardName;
+        /** 占位符标记名（用于文档中实际显示的占位符，如"企业名称"，与name一致） */
+        private final String placeholderName;
         private final String type;
         private final String dataSource;
         private final String sourceSheet;
@@ -743,7 +746,7 @@ public class CompanyTemplatePlaceholderService {
         private final List<CompanyTemplatePlaceholder> positions;
 
         public PlaceholderGroupVO(String id, String companyTemplateId, String moduleId,
-                                   String name, String standardName, String type,
+                                   String name, String standardName, String placeholderName, String type,
                                    String dataSource, String sourceSheet, String sourceField,
                                    String description, Integer sort,
                                    String bindingStatus, String status,
@@ -756,6 +759,7 @@ public class CompanyTemplatePlaceholderService {
             this.moduleId = moduleId;
             this.name = name; // 展示名
             this.standardName = standardName; // 标准名
+            this.placeholderName = placeholderName; // 占位符标记名（与name一致）
             this.type = type;
             this.dataSource = dataSource;
             this.sourceSheet = sourceSheet;
@@ -779,6 +783,8 @@ public class CompanyTemplatePlaceholderService {
         public String getName() { return name; }
         /** 获取占位符标准名（用于识别） */
         public String getStandardName() { return standardName; }
+        /** 获取占位符标记名（用于文档中实际显示的占位符，与name一致） */
+        public String getPlaceholderName() { return placeholderName; }
         public String getType() { return type; }
         public String getDataSource() { return dataSource; }
         public String getSourceSheet() { return sourceSheet; }
