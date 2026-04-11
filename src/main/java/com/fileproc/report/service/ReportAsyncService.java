@@ -7,10 +7,12 @@ import com.fileproc.datafile.mapper.DataFileMapper;
 import com.fileproc.report.entity.Report;
 import com.fileproc.report.mapper.ReportMapper;
 import com.fileproc.template.entity.CompanyTemplate;
+import com.fileproc.template.entity.CompanyTemplatePlaceholder;
 import com.fileproc.template.entity.Placeholder;
 import com.fileproc.template.entity.SystemPlaceholder;
 import com.fileproc.template.entity.Template;
 import com.fileproc.template.mapper.CompanyTemplateMapper;
+import com.fileproc.template.mapper.CompanyTemplatePlaceholderMapper;
 import com.fileproc.template.mapper.PlaceholderMapper;
 import com.fileproc.template.mapper.SystemPlaceholderMapper;
 import com.fileproc.template.mapper.TemplateMapper;
@@ -44,6 +46,7 @@ public class ReportAsyncService {
     private final TemplateMapper templateMapper;
     private final PlaceholderMapper placeholderMapper;
     private final CompanyTemplateMapper companyTemplateMapper;
+    private final CompanyTemplatePlaceholderMapper companyTemplatePlaceholderMapper;
     private final SystemPlaceholderMapper systemPlaceholderMapper;
     private final ReportGenerateEngine reportGenerateEngine;
 
@@ -104,10 +107,11 @@ public class ReportAsyncService {
 
     private void generateByCompanyTemplate(Report report, CompanyTemplate companyTemplate,
                                             String companyId, int year, String tenantId) {
-        List<SystemPlaceholder> systemPlaceholders =
-                systemPlaceholderMapper.selectByTemplateId(companyTemplate.getSystemTemplateId());
+        // 从企业子模板占位符表读取占位符定义（包含数据源配置）
+        List<CompanyTemplatePlaceholder> templatePlaceholders =
+                companyTemplatePlaceholderMapper.selectByTemplateId(companyTemplate.getId());
 
-        List<Placeholder> placeholders = systemPlaceholders.stream()
+        List<Placeholder> placeholders = templatePlaceholders.stream()
                 .map(this::toPlaceholder)
                 .toList();
 
@@ -253,6 +257,22 @@ public class ReportAsyncService {
         ph.setSourceField(sp.getSourceField());
         ph.setChartType(sp.getChartType());
         ph.setDescription(sp.getDescription() != null ? sp.getDescription() : "");
+        return ph;
+    }
+
+    /**
+     * 将企业子模板占位符转换为 Placeholder 对象
+     */
+    private Placeholder toPlaceholder(CompanyTemplatePlaceholder ctp) {
+        Placeholder ph = new Placeholder();
+        ph.setId(ctp.getId());
+        // 使用 name（显示名称）作为占位符名称
+        ph.setName(ctp.getName());
+        ph.setType(ctp.getType());
+        ph.setDataSource(ctp.getDataSource());
+        ph.setSourceSheet(ctp.getSourceSheet());
+        ph.setSourceField(ctp.getSourceField());
+        ph.setDescription(ctp.getDescription() != null ? ctp.getDescription() : "");
         return ph;
     }
 }

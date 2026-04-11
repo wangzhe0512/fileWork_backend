@@ -80,14 +80,8 @@ public class ReportGenerateEngine {
         // 用于 TABLE_ROW_TEMPLATE 类型，fillTableByRowTemplateMapped 按字段名填值
         Map<String, List<Map<String, Object>>> rowTemplateValues = new LinkedHashMap<>();
 
-        // 行模板类型 Sheet 名集合：从当前占位符列表动态推断，无需硬编码
-        // 凡是 type=table + dataSource=list 的占位符，其 sourceSheet 即为行模板路径的 Sheet 名
-        // BVD SummaryYear 已由上方独立 if 分支处理，dataSource=list 条件天然将其排除
-        Set<String> rowTemplateSheets = placeholders.stream()
-                .filter(ph -> "table".equals(ph.getType()) && "list".equals(ph.getDataSource())
-                        && ph.getSourceSheet() != null)
-                .map(Placeholder::getSourceSheet)
-                .collect(Collectors.toSet());
+        // 行模板类型 Sheet 名集合已不再使用，改为在处理时直接通过注册表 columnDefs 判断是否为行模板类型
+        // 保留此变量仅为兼容，不再用于判断行模板路径
 
         for (Placeholder ph : placeholders) {
             String dataSource = ph.getDataSource(); // list / bvd
@@ -121,8 +115,8 @@ public class ReportGenerateEngine {
                     rowTemplateValues.put(ph.getName(), rowData);
                     log.info("[ReportEngine] BVD SummaryYear '{}' 行模板数据提取完成：{} 行，columnDefs={}",
                             ph.getName(), rowData.size(), colDefs);
-                } else if (rowTemplateSheets.contains(ph.getSourceSheet())) {
-                    // 行模板克隆类型：走按字段名提取路径，输出 List<Map<字段名,值>>
+                } else if (hasColumnDefs(ph.getName(), ph.getCompanyId())) {
+                    // 行模板克隆类型：注册表有 columnDefs 定义（TABLE_ROW_TEMPLATE），输出 List<Map<字段名,値>>
                     List<Map<String, Object>> rowData = extractRowTemplateData(rows, ph.getSourceSheet(), ph.getName());
                     rowTemplateValues.put(ph.getName(), rowData);
                 } else {
@@ -1631,8 +1625,10 @@ public class ReportGenerateEngine {
      * @return 扩展后的值；不满足条件时原样返回
      */
     private String expandYearValue(String placeholderName, String value) {
-        if (placeholderName != null && placeholderName.endsWith("-B2")
-                && value != null && value.matches("^\\d{2}$")) {
+        // 对以 "-B2" 结尾或名称为 "年度" 的占位符进行年度扩展
+        boolean isYearPlaceholder = placeholderName != null && 
+                (placeholderName.endsWith("-B2") || "年度".equals(placeholderName));
+        if (isYearPlaceholder && value != null && value.matches("^\\d{2}$")) {
             return "20" + value + "年";
         }
         return value;
@@ -2063,7 +2059,31 @@ public class ReportGenerateEngine {
     }
 
     /**
-     * 获取指定占位符的 column_defs（企业级优先，系统级兜底，最终默认 ["#","COMPANY"]）。
+     * 判断指定占位符是否具有 columnDefs（即是否为 TABLE_ROW_TEMPLATE 类型）。
+     * 从注册表查询，有 columnDefs 且非空返回 true，否则返回 false（TABLE_CLEAR_FULL 等类型）。
+     * 与 getColumnDefsForPlaceholder 的区别：本方法无居底逻辑，仅用于类型判断。
+     */
+    private boolean hasColumnDefs(String placeholderName, String companyId) {
+        if (placeholderRegistryService != null) {
+            try {
+                List<com.fileproc.report.service.ReverseTemplateEngine.RegistryEntry> registry =
+                        placeholderRegistryService.getEffectiveRegistry(companyId);
+                for (com.fileproc.report.service.ReverseTemplateEngine.RegistryEntry entry : registry) {
+                    if (placeholderName.equals(entry.getDisplayName())
+                            && entry.getColumnDefs() != null
+                            && !entry.getColumnDefs().isEmpty()) {
+                        return true;
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[ReportEngine] hasColumnDefs 查询失败: {}", e.getMessage());
+            }
+        }
+        return false;
+    }
+    
+    /**
+     * 获取指定占位符的 column_defs（企业级优先，系统级居底，最终默认 ["#","COMPANY"]）。
      * 从 PlaceholderRegistryService 获取有效注册表，找到对应条目的 columnDefs。
      *
      * @param placeholderName 占位符名称
