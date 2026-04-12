@@ -436,9 +436,17 @@ public class CompanyTemplatePlaceholderService {
             int positionCount = positions.size();
 
             // bindingStatus：只要有一条记录绑定了就算 bound
-            boolean isBound = positions.stream().anyMatch(ph ->
-                    ph.getSourceSheet() != null && !ph.getSourceSheet().isBlank()
-                            && ph.getSourceField() != null && !ph.getSourceField().isBlank());
+            // 规则：
+            //   - text/bvd 类型：sourceSheet + sourceField 均非空
+            //   - table 类型（TABLE_ROW_TEMPLATE/TABLE_CLEAR_FULL）：sourceField 设计为 null，
+            //     只需 sourceSheet 非空即算绑定
+            boolean isBound = positions.stream().anyMatch(ph -> {
+                if (ph.getSourceSheet() == null || ph.getSourceSheet().isBlank()) return false;
+                // table 类型：sourceField 可为 null（TABLE_ROW_TEMPLATE/TABLE_CLEAR_FULL 规范）
+                if ("table".equals(ph.getType())) return true;
+                // text/bvd/chart 类型：需要 sourceField 也非空
+                return ph.getSourceField() != null && !ph.getSourceField().isBlank();
+            });
             String bindingStatus = isBound ? "bound" : "unbound";
 
             // status（确认状态）：有 confirmed 则为 confirmed，否则有 ignored 则为 ignored，否则为 uncertain

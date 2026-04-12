@@ -3212,91 +3212,32 @@ public class ReverseTemplateEngine {
             }
             return;
         }
-        final String tNamespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-        final String localName = "t";
-        boolean written = false;
-        for (XWPFParagraph para : paras) {
-            // 使用 XML 游标深度遍历所有 <w:t> 节点
-            org.apache.xmlbeans.XmlCursor cursor = para.getCTP().newCursor();
-            java.util.List<org.apache.xmlbeans.XmlObject> tNodes = new java.util.ArrayList<>();
-            try {
-                // 先收集所有 <w:t> 节点
-                if (cursor.toFirstChild()) {
-                    do {
-                        if (tNamespace.equals(cursor.getName().getNamespaceURI())
-                                && localName.equals(cursor.getName().getLocalPart())) {
-                            org.apache.xmlbeans.XmlObject tObj = cursor.getObject();
-                            if (tObj != null) tNodes.add(tObj);
-                        }
-                        // 递归遍历子元素
-                        collectTNodes(cursor, tNamespace, localName, tNodes);
-                    } while (cursor.toNextSibling());
-                }
-            } finally {
-                cursor.dispose();
+        
+        // 简化处理：保留第一个段落，删除多余 run，只保留第一个 run
+        XWPFParagraph firstPara = paras.get(0);
+        List<XWPFRun> runs = firstPara.getRuns();
+        
+        if (runs.isEmpty()) {
+            if (!text.isEmpty()) {
+                XWPFRun run = firstPara.createRun();
+                run.setText(text);
             }
-            if (tNodes.isEmpty()) {
-                // 无 <w:t> 节点：若需要写入，新建 Run
-                if (!written && !text.isEmpty()) {
-                    XWPFRun run = para.createRun();
-                    run.setText(text);
-                    written = true;
-                }
-                continue;
+        } else {
+            // 保留第一个 run，设置文本
+            XWPFRun firstRun = runs.get(0);
+            firstRun.setText(text, 0);
+            
+            // 删除多余的 run（从后往前删）
+            for (int i = runs.size() - 1; i > 0; i--) {
+                firstPara.removeRun(i);
             }
-            // 第一个 <w:t>：写入目标文本
-            if (!written) {
-                org.apache.xmlbeans.XmlObject firstT = tNodes.get(0);
-                if (firstT instanceof CTText) {
-                    CTText ct = (CTText) firstT;
-                    ct.setStringValue(text);
-                    ct.setSpace(org.apache.xmlbeans.impl.xb.xmlschema.SpaceAttribute.Space.PRESERVE);
-                } else {
-                    // 如果是 XmlAnyType 等其他类型，尝试用 DOM 操作
-                    org.apache.xmlbeans.XmlCursor tCursor = firstT.newCursor();
-                    try {
-                        if (tCursor.toFirstContentToken() != org.apache.xmlbeans.XmlCursor.TokenType.NONE) {
-                            tCursor.removeXmlContents();
-                        }
-                        tCursor.toStartDoc();
-                        tCursor.insertChars(text);
-                    } finally {
-                        tCursor.dispose();
-                    }
-                }
-                written = true;
-                // 其余 <w:t>：清空
-                for (int i = 1; i < tNodes.size(); i++) {
-                    org.apache.xmlbeans.XmlObject tObj = tNodes.get(i);
-                    if (tObj instanceof CTText) {
-                        ((CTText) tObj).setStringValue("");
-                    } else {
-                        org.apache.xmlbeans.XmlCursor tc = tObj.newCursor();
-                        try {
-                            tc.removeXmlContents();
-                            tc.toStartDoc();
-                            tc.insertChars("");
-                        } finally {
-                            tc.dispose();
-                        }
-                    }
-                }
-            } else {
-                // 后续段落：所有 <w:t> 清空
-                for (org.apache.xmlbeans.XmlObject tObj : tNodes) {
-                    if (tObj instanceof CTText) {
-                        ((CTText) tObj).setStringValue("");
-                    } else {
-                        org.apache.xmlbeans.XmlCursor tc = tObj.newCursor();
-                        try {
-                            tc.removeXmlContents();
-                            tc.toStartDoc();
-                            tc.insertChars("");
-                        } finally {
-                            tc.dispose();
-                        }
-                    }
-                }
+        }
+        
+        // 清空其他段落的内容（保留段落结构）
+        for (int pi = 1; pi < paras.size(); pi++) {
+            XWPFParagraph para = paras.get(pi);
+            for (XWPFRun run : para.getRuns()) {
+                run.setText("", 0);
             }
         }
     }

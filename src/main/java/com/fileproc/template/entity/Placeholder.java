@@ -24,8 +24,8 @@ public class Placeholder {
     @Size(max = 100, message = "占位符名称最长100个字符")
     private String name;
 
-    /** text | table | chart */
-    @Pattern(regexp = "^(text|table|chart)$", message = "type只能为 text、table 或 chart")
+    /** text | table | chart | image */
+    @Pattern(regexp = "^(text|table|chart|image)$", message = "type只能为 text、table、chart 或 image")
     private String type;
 
     /** list | bvd */

@@ -207,7 +207,7 @@ public class CompanyTemplateController {
                 companyTemplateService.updateFileSize(companyTemplate.getId(), fileSize);
             } catch (IOException ignored) {}
 
-            initModulesAndPlaceholders(companyTemplate.getId(), result);
+            initModulesAndPlaceholders(companyTemplate.getId(), result, companyId);
             cleanTempDir(tmpDir);
 
             log.info("[CompanyTemplateController] 旧引擎反向生成完成: templateId={}, matched={}",
@@ -269,18 +269,34 @@ public class CompanyTemplateController {
     }
 
     /**
-     * 初始化模块和占位符记录（新引擎版本）
+     * 初始化模块和占位符记录（降级引擎版本）
      * <p>
-     * 不再依赖 SystemPlaceholder 规则列表，直接从 MatchedPlaceholder 自身字段
-     * （moduleCode / moduleName / dataSource / sourceSheet / sourceField）填充占位符实体。
+     * 直接从 MatchedPlaceholder 自身字段持久化。
+     * 占位符类型（type）通过注册表查询确定：
+     * TABLE_ROW_TEMPLATE / TABLE_CLEAR_FULL → "table"，其余 → "text"。
      * </p>
      */
     private void initModulesAndPlaceholders(String templateId,
-                                             ReverseTemplateEngine.ReverseResult result) {
+                                             ReverseTemplateEngine.ReverseResult result,
+                                             String companyId) {
         List<ReverseTemplateEngine.MatchedPlaceholder> matchedList = result.getAllMatchedPlaceholders();
         if (matchedList == null || matchedList.isEmpty()) {
             log.info("[CompanyTemplateController] 没有匹配到任何占位符，跳过模块初始化: templateId={}", templateId);
             return;
+        }
+
+        // 预加载注册表，用于查询占位符类型（displayName → type）
+        Map<String, ReverseTemplateEngine.PlaceholderType> displayNameToType = new HashMap<>();
+        try {
+            List<ReverseTemplateEngine.RegistryEntry> registry =
+                    placeholderRegistryService.getEffectiveRegistry(companyId);
+            for (ReverseTemplateEngine.RegistryEntry entry : registry) {
+                if (entry.getDisplayName() != null) {
+                    displayNameToType.put(entry.getDisplayName(), entry.getType());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[CompanyTemplateController] 注册表加载失败，type 将全部默认为 text: {}", e.getMessage());
         }
 
         // 1. 从 matchedList 直接提取模块信息（code -> name），保持出现顺序
@@ -315,6 +331,17 @@ public class CompanyTemplateController {
                 continue;
             }
 
+            // 从注册表查询占位符类型：TABLE_ROW_TEMPLATE / TABLE_CLEAR_FULL → "table"，其余 → "text"
+            ReverseTemplateEngine.PlaceholderType phType = displayNameToType.get(phName);
+            String typeStr;
+            if (phType == ReverseTemplateEngine.PlaceholderType.TABLE_ROW_TEMPLATE
+                    || phType == ReverseTemplateEngine.PlaceholderType.TABLE_CLEAR_FULL
+                    || phType == ReverseTemplateEngine.PlaceholderType.TABLE_CLEAR) {
+                typeStr = "table";
+            } else {
+                typeStr = "text";
+            }
+
             CompanyTemplatePlaceholder ph = new CompanyTemplatePlaceholder();
             ph.setId(UUID.randomUUID().toString());
             ph.setCompanyTemplateId(templateId);
@@ -329,8 +356,7 @@ public class CompanyTemplateController {
             ph.setSort(phSort++);
             ph.setCreatedAt(LocalDateTime.now());
             ph.setUpdatedAt(LocalDateTime.now());
-            // 直接从 matched 获取来源信息，不再查 systemPhMap
-            ph.setType("text"); // 默认 text 类型（chart/image 本期不处理）
+            ph.setType(typeStr);
             ph.setDataSource(matched.getDataSource());
             ph.setSourceSheet(matched.getSourceSheet());
             ph.setSourceField(matched.getSourceField());

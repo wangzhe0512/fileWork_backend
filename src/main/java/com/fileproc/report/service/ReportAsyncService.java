@@ -16,6 +16,8 @@ import com.fileproc.template.mapper.CompanyTemplatePlaceholderMapper;
 import com.fileproc.template.mapper.PlaceholderMapper;
 import com.fileproc.template.mapper.SystemPlaceholderMapper;
 import com.fileproc.template.mapper.TemplateMapper;
+import com.fileproc.registry.mapper.PlaceholderRegistryMapper;
+import com.fileproc.registry.entity.PlaceholderRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -48,6 +50,7 @@ public class ReportAsyncService {
     private final CompanyTemplateMapper companyTemplateMapper;
     private final CompanyTemplatePlaceholderMapper companyTemplatePlaceholderMapper;
     private final SystemPlaceholderMapper systemPlaceholderMapper;
+    private final PlaceholderRegistryMapper placeholderRegistryMapper;
     private final ReportGenerateEngine reportGenerateEngine;
 
     @Value("${file.upload-dir:./uploads}")
@@ -111,9 +114,28 @@ public class ReportAsyncService {
         List<CompanyTemplatePlaceholder> templatePlaceholders =
                 companyTemplatePlaceholderMapper.selectByTemplateId(companyTemplate.getId());
 
-        List<Placeholder> placeholders = templatePlaceholders.stream()
-                .map(this::toPlaceholder)
-                .toList();
+        List<Placeholder> placeholders = new java.util.ArrayList<>(templatePlaceholders.stream()
+                .map(ctp -> toPlaceholder(ctp, companyId))
+                .toList());
+        
+        // 同时加载注册表中的 TABLE_CLEAR_FULL 类型占位符（如 PL 财务状况表）
+        List<PlaceholderRegistry> registryEntries = placeholderRegistryMapper.selectEffectiveEntries(companyId);
+        int addedCount = 0;
+        for (PlaceholderRegistry entry : registryEntries) {
+            if ("TABLE_CLEAR_FULL".equals(entry.getPhType())) {
+                // 检查是否已存在同名占位符
+                boolean exists = placeholders.stream()
+                        .anyMatch(p -> p.getName().equals(entry.getPlaceholderName()));
+                if (!exists) {
+                    placeholders.add(toPlaceholderFromRegistry(entry));
+                    addedCount++;
+                    log.info("[ReportAsyncService] 添加注册表占位符: name='{}', type='{}', sourceSheet='{}'",
+                            entry.getPlaceholderName(), entry.getPhType(), entry.getSheetName());
+                }
+            }
+        }
+        log.info("[ReportAsyncService] 共加载 {} 个占位符（企业级 {} 个，注册表 {} 个）",
+                placeholders.size(), templatePlaceholders.size(), addedCount);
 
         List<DataFile> dataFiles = dataFileMapper.selectWithFilePathByCompanyAndYear(companyId, year);
 
@@ -155,7 +177,7 @@ public class ReportAsyncService {
                 log.warn("[ReportAsyncService] 报告已被取消/覆盖，放弃写入失败状态（新架构）: reportId={}", report.getId());
                 return;
             }
-            markFailed(report, e.getMessage());
+            markFailed(report, e.getMessage() != null ? e.getMessage() : e.getClass().getName());
         }
     }
 
@@ -215,7 +237,7 @@ public class ReportAsyncService {
                 log.warn("[ReportAsyncService] 报告已被取消/覆盖，放弃写入失败状态（旧架构）: reportId={}", report.getId());
                 return;
             }
-            markFailed(report, e.getMessage());
+            markFailed(report, e.getMessage() != null ? e.getMessage() : e.getClass().getName());
         }
     }
 
@@ -262,8 +284,11 @@ public class ReportAsyncService {
 
     /**
      * 将企业子模板占位符转换为 Placeholder 对象
+     *
+     * @param ctp       子模板占位符实体
+     * @param companyId 企业ID（传入 Placeholder.companyId，供 ReportGenerateEngine 查注册表 columnDefs 使用）
      */
-    private Placeholder toPlaceholder(CompanyTemplatePlaceholder ctp) {
+    private Placeholder toPlaceholder(CompanyTemplatePlaceholder ctp, String companyId) {
         Placeholder ph = new Placeholder();
         ph.setId(ctp.getId());
         // 使用 name（显示名称）作为占位符名称
@@ -273,6 +298,33 @@ public class ReportAsyncService {
         ph.setSourceSheet(ctp.getSourceSheet());
         ph.setSourceField(ctp.getSourceField());
         ph.setDescription(ctp.getDescription() != null ? ctp.getDescription() : "");
+        // 传入 companyId，供 ReportGenerateEngine 查询企业级 columnDefs 使用
+        ph.setCompanyId(companyId);
+        return ph;
+    }
+
+    /**
+     * 将注册表条目转换为 Placeholder 对象
+     * <p>
+     * 使用 display_name 作为占位符名称，以便与 Word 模板中的标记（如 {{PL 财务数据}}）匹配。
+     * 如果 display_name 为空，则 fallback 到 placeholder_name。
+     * </p>
+     *
+     * @param entry 注册表条目
+     */
+    private Placeholder toPlaceholderFromRegistry(PlaceholderRegistry entry) {
+        Placeholder ph = new Placeholder();
+        ph.setId(entry.getId());
+        // 使用 display_name 作为占位符名称（如 "PL 财务数据"），以便与 Word 模板中的标记匹配
+        String name = entry.getDisplayName();
+        if (name == null || name.trim().isEmpty()) {
+            name = entry.getPlaceholderName();
+        }
+        ph.setName(name);
+        ph.setType(entry.getPhType());
+        ph.setDataSource(entry.getDataSource());
+        ph.setSourceSheet(entry.getSheetName());
+        ph.setSourceField(entry.getCellAddress());
         return ph;
     }
 }

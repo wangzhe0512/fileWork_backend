@@ -4,6 +4,7 @@ import com.fileproc.common.BizException;
 import com.fileproc.common.TenantContext;
 import com.fileproc.llm.client.OllamaClient;
 import com.fileproc.llm.config.OllamaProperties;
+import com.fileproc.registry.service.PlaceholderRegistryService;
 import com.fileproc.report.service.ReverseTemplateEngine;
 import com.fileproc.template.entity.CompanyTemplate;
 import com.fileproc.template.entity.CompanyTemplatePlaceholder;
@@ -53,6 +54,7 @@ public class LlmReverseOrchestrator {
     private final CompanyTemplatePlaceholderService placeholderService;
     private final CompanyTemplateModuleService moduleService;
     private final StringRedisTemplate redisTemplate;
+    private final PlaceholderRegistryService placeholderRegistryService;
 
     /** Redis 任务状态 key 前缀 */
     private static final String TASK_KEY_PREFIX = "llm:task:";
@@ -127,7 +129,7 @@ public class LlmReverseOrchestrator {
             } catch (IOException ignored) {}
 
             // 初始化模块和占位符记录
-            initModulesAndPlaceholders(companyTemplate.getId(), result, systemPlaceholders);
+            initModulesAndPlaceholders(companyTemplate.getId(), result, systemPlaceholders, companyTemplate.getCompanyId());
 
             // 统计低置信度数量
             int lowConfidenceCount = result.getPendingConfirmList() != null
@@ -173,20 +175,40 @@ public class LlmReverseOrchestrator {
     // ========== 内部方法 ==========
 
     /**
-     * 初始化模块和占位符记录（复用旧逻辑，适配大模型引擎结果）
+     * 初始化模块和占位符记录（适配大模型/降级引擎结果）
+     * <p>
+     * type 字段优先从注册表按 displayName 查询（准确），未命中时降级为 guessType（positionJson 推断）。
+     * </p>
      */
     private void initModulesAndPlaceholders(String templateId,
                                               ReverseTemplateEngine.ReverseResult result,
-                                              List<SystemPlaceholder> systemPlaceholders) {
+                                              List<SystemPlaceholder> systemPlaceholders,
+                                              String companyId) {
         List<ReverseTemplateEngine.MatchedPlaceholder> matchedList = result.getAllMatchedPlaceholders();
         if (matchedList == null || matchedList.isEmpty()) {
             log.info("[LlmReverseOrchestrator] 没有匹配到任何占位符，跳过模块初始化: templateId={}", templateId);
             return;
         }
 
-        // 构建系统占位符名称到对象的映射（降级引擎时使用）
-        Map<String, SystemPlaceholder> systemPhMap = systemPlaceholders != null
-                ? systemPlaceholders.stream().collect(Collectors.toMap(SystemPlaceholder::getName, ph -> ph, (a, b) -> a))
+        // 预加载注册表：displayName → PlaceholderType，用于准确写入 type 字段
+        Map<String, ReverseTemplateEngine.PlaceholderType> displayNameToType = new HashMap<>();
+        try {
+            List<ReverseTemplateEngine.RegistryEntry> registry =
+                    placeholderRegistryService.getEffectiveRegistry(companyId);
+            for (ReverseTemplateEngine.RegistryEntry entry : registry) {
+                if (entry.getDisplayName() != null) {
+                    displayNameToType.put(entry.getDisplayName(), entry.getType());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[LlmReverseOrchestrator] 注册表加载失败，type 将降级为 guessType: {}", e.getMessage());
+        }
+
+        // 构建系统占位符 displayName → 对象的映射（用于补充 dataSource/sourceSheet/sourceField）
+        Map<String, SystemPlaceholder> displayNameToSystemPh = systemPlaceholders != null
+                ? systemPlaceholders.stream()
+                    .filter(p -> p.getDisplayName() != null)
+                    .collect(Collectors.toMap(SystemPlaceholder::getDisplayName, ph -> ph, (a, b) -> a))
                 : Collections.emptyMap();
 
         // 提取并创建模块
@@ -220,15 +242,30 @@ public class LlmReverseOrchestrator {
                 continue;
             }
 
-            SystemPlaceholder systemPh = systemPhMap.get(phName);
+            // displayName = resolveDisplayName 的返回值（语义化名称）
+            SystemPlaceholder systemPh = displayNameToSystemPh.get(phName);
+            String displayName = resolveDisplayName(phName, systemPh, matched);
+
+            // 1. 优先从注册表按 displayName 查 type
+            ReverseTemplateEngine.PlaceholderType phType = displayNameToType.get(displayName);
+            String typeStr;
+            if (phType == ReverseTemplateEngine.PlaceholderType.TABLE_ROW_TEMPLATE
+                    || phType == ReverseTemplateEngine.PlaceholderType.TABLE_CLEAR_FULL
+                    || phType == ReverseTemplateEngine.PlaceholderType.TABLE_CLEAR) {
+                typeStr = "table";
+            } else if (phType != null) {
+                typeStr = "text";
+            } else {
+                // 2. 注册表未命中：降级为 positionJson 推断（仅新创建的自由占位符走此分支）
+                typeStr = guessType(matched);
+            }
 
             CompanyTemplatePlaceholder ph = new CompanyTemplatePlaceholder();
             ph.setId(UUID.randomUUID().toString());
             ph.setCompanyTemplateId(templateId);
             ph.setModuleId(moduleId);
             ph.setPlaceholderName(phName);
-            // 大模型已生成语义化名称（phName 格式为 list-sheetName-fieldAddr，取最后段）
-            ph.setName(resolveDisplayName(phName, systemPh, matched));
+            ph.setName(displayName);
             ph.setStatus(matched.getStatus());
             ph.setExpectedValue(matched.getExpectedValue());
             ph.setActualValue(matched.getActualValue());
@@ -237,20 +274,20 @@ public class LlmReverseOrchestrator {
             ph.setSort(phSort++);
             ph.setCreatedAt(LocalDateTime.now());
             ph.setUpdatedAt(LocalDateTime.now());
+            ph.setType(typeStr);
 
             if (systemPh != null) {
-                ph.setType(systemPh.getType());
+                // 系统占位符：从注册表补充 dataSource/sourceSheet/sourceField
                 ph.setDataSource(systemPh.getDataSource());
                 ph.setSourceSheet(systemPh.getSourceSheet());
                 ph.setSourceField(systemPh.getSourceField());
                 ph.setDescription(systemPh.getDescription());
             } else {
-                // 大模型引擎：从 placeholderName 解析 dataSource/sheetName/fieldAddr
+                // 大模型自由识别的占位符：从 placeholderName 解析 dataSource/sheetName/fieldAddr
                 String[] parts = phName.split("-", 3);
                 ph.setDataSource(parts.length >= 1 ? parts[0] : null);
                 ph.setSourceSheet(parts.length >= 2 ? parts[1] : matched.getModuleName());
                 ph.setSourceField(parts.length >= 3 ? parts[2] : null);
-                ph.setType(guessType(matched));
             }
 
             // 从 PendingConfirmList 中找到对应的 confidence（低置信度项才有）

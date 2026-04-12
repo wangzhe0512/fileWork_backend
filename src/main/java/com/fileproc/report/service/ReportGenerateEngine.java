@@ -11,6 +11,7 @@ import org.apache.poi.xwpf.usermodel.*;
 import org.apache.xmlbeans.XmlObject;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTRow;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTbl;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTc;
 import org.springframework.stereotype.Component;
 
 import java.io.FileInputStream;
@@ -63,10 +64,13 @@ public class ReportGenerateEngine {
         for (DataFile df : dataFiles) {
             if (df.getFilePath() != null && Files.exists(Paths.get(df.getFilePath()))) {
                 dataFileByType.put(df.getType(), df);
+                log.info("[ReportEngine] 加载数据文件: type={}, path={}", df.getType(), df.getFilePath());
             } else {
                 log.warn("[ReportEngine] 数据文件不存在，跳过: id={}, path={}", df.getId(), df.getFilePath());
             }
         }
+        log.info("[ReportEngine] 数据文件索引构建完成，共 {} 个类型: {}", 
+                dataFileByType.size(), dataFileByType.keySet());
 
         // 按 (type, sourceSheet) 缓存读取结果，避免重复 IO
         // key: "type:sheetIndex"
@@ -83,16 +87,20 @@ public class ReportGenerateEngine {
         // 行模板类型 Sheet 名集合已不再使用，改为在处理时直接通过注册表 columnDefs 判断是否为行模板类型
         // 保留此变量仅为兼容，不再用于判断行模板路径
 
+        log.info("[ReportEngine] 开始处理 {} 个占位符", placeholders.size());
         for (Placeholder ph : placeholders) {
             String dataSource = ph.getDataSource(); // list / bvd
             DataFile df = dataFileByType.get(dataSource);
             if (df == null) {
-                log.warn("[ReportEngine] 占位符 {} 对应的数据文件未找到，跳过", ph.getName());
+                log.warn("[ReportEngine] 占位符 '{}' 对应的数据文件未找到，dataSource='{}'，跳过", 
+                        ph.getName(), dataSource);
                 continue;
             }
 
             // 解析 sourceSheet（可为数字索引或 sheet 名，默认 0）
             String sheetKey = dataSource + ":" + (ph.getSourceSheet() != null ? ph.getSourceSheet() : "0");
+            log.info("[ReportEngine] 处理占位符 '{}'，类型='{}'，数据源='{}'，sheet='{}'，缓存键='{}'", 
+                    ph.getName(), ph.getType(), dataSource, ph.getSourceSheet(), sheetKey);
             List<Map<Integer, Object>> rows = excelDataCache.computeIfAbsent(
                     sheetKey,
                     k -> readSheet(df.getFilePath(), ph.getSourceSheet())
@@ -123,6 +131,12 @@ public class ReportGenerateEngine {
                     List<List<Object>> tableData = extractTableData(rows, ph.getSourceSheet());
                     tableValues.put(ph.getName(), tableData);
                 }
+            } else if ("TABLE_CLEAR_FULL".equals(ph.getType())) {
+                // TABLE_CLEAR_FULL：整张表全部清空，从 sourceSheet 逐行展开数据
+                // 如 PL 财务状况表：从 PL Sheet 读取数据，保留三列（项目/公式/金额）
+                List<List<Object>> tableData = extractTableData(rows, ph.getSourceSheet());
+                tableValues.put(ph.getName(), tableData);
+                log.info("[ReportEngine] TABLE_CLEAR_FULL '{}' 数据提取完成：{} 行", ph.getName(), tableData.size() - 1);
             } else if ("chart".equals(ph.getType())) {
                 // 图表：以文字摘要形式嵌入（完整图表嵌入留作 TODO）
                 List<List<Object>> chartData = extractTableData(rows, ph.getSourceSheet());
@@ -146,11 +160,12 @@ public class ReportGenerateEngine {
 
             mergeAllRunsInDocument(doc);
             replaceParagraphPlaceholders(doc, textValues);
-            replaceTablePlaceholders(doc, tableValues, rowTemplateValues);
-            // 同时替换表格内文本占位符
+            // 先替换所有文本占位符（不改变表格行结构）
             replaceTextInTables(doc, textValues);
             // 替换页眉/页脚中的文本占位符
             replaceHeaderFooterPlaceholders(doc, textValues);
+            // 最后做表格行模板操作（修改 CTTbl 结构，必须在所有文本替换完成后执行）
+            replaceTablePlaceholders(doc, tableValues, rowTemplateValues);
 
             try (FileOutputStream fos = new FileOutputStream(outputPath)) {
                 doc.write(fos);
@@ -191,7 +206,13 @@ public class ReportGenerateEngine {
                         .headRowNumber(0)
                         .doReadSync();
             }
-            log.debug("[ReportEngine] 读取文件 {} sheet='{}' 共 {} 行", filePath, sourceSheet, result.size());
+            log.info("[ReportEngine] 读取文件 {} sheet='{}' 共 {} 行", filePath, sourceSheet, result.size());
+            // 打印前15行的第一列内容，用于调试
+            for (int i = 0; i < Math.min(15, result.size()); i++) {
+                Map<Integer, Object> row = result.get(i);
+                Object firstCol = row != null ? row.get(0) : null;
+                log.info("[ReportEngine] 行[{}] 第一列='{}'", i, firstCol != null ? firstCol.toString() : "(null)");
+            }
             return result;
         } catch (Exception e) {
             log.error("[ReportEngine] 读取 Excel 失败: file={}, sheet={}, err={}", filePath, sourceSheet, e.getMessage());
@@ -292,24 +313,75 @@ public class ReportGenerateEngine {
     private List<List<Object>> extractTableData(List<Map<Integer, Object>> rows, String sheetName) {
         if (rows.isEmpty()) return Collections.emptyList();
 
-        // PL Sheet 专用截取逻辑：只取行3~11（共9行数据）
+        // PL Sheet 专用截取逻辑：动态识别表头和数据行
         if ("PL".equals(sheetName) || "PL含特殊因素调整".equals(sheetName)) {
             List<List<Object>> result = new ArrayList<>();
-            // 虚拟表头行（空列表），供 fillTableWithData 的 startDataRow=1 跳过，保留 Word 原有表头
-            result.add(Collections.emptyList());
-            // 截取数据行：rows[3..11]，共9行（跳过空行、表头行、空行以及下方的关联销售明细）
-            int dataStart = 3;
-            int dataEnd = Math.min(12, rows.size()); // 行12以后是关联销售明细，不包含
-            for (int i = dataStart; i < dataEnd; i++) {
+            
+            // 动态查找表头行（第一列包含"项目"或"项目名称"的行）
+            int headerIndex = -1;
+            for (int i = 0; i < Math.min(5, rows.size()); i++) {
                 Map<Integer, Object> row = rows.get(i);
+                if (row == null || row.isEmpty()) continue;
+                Object firstCol = row.get(0);
+                String firstColStr = firstCol != null ? firstCol.toString().trim() : "";
+                if ("项目".equals(firstColStr) || "项目名称".equals(firstColStr)) {
+                    headerIndex = i;
+                    break;
+                }
+            }
+            
+            // 添加表头行
+            if (headerIndex >= 0) {
+                Map<Integer, Object> headerRow = rows.get(headerIndex);
+                List<Object> headerLine = new ArrayList<>();
+                for (int col = 0; col < 3; col++) {
+                    Object val = headerRow.getOrDefault(col, "");
+                    headerLine.add(val != null ? val.toString() : "");
+                }
+                result.add(headerLine);
+                log.info("[ReportEngine] PL Sheet '{}' 找到并添加表头行(index={}): {}", sheetName, headerIndex, headerLine);
+            } else {
+                log.warn("[ReportEngine] PL Sheet '{}' 未找到表头行，使用默认表头", sheetName);
+                result.add(java.util.Arrays.asList("项目", "公式", "金额"));
+            }
+            
+            // 从表头行的下一行开始查找数据行（最多9行数据）
+            int dataStart = headerIndex >= 0 ? headerIndex + 1 : 0;
+            int dataCount = 0;
+            for (int i = dataStart; i < rows.size() && dataCount < 9; i++) {
+                Map<Integer, Object> row = rows.get(i);
+                // 跳过空行（行数据为空或第一列没有值）
+                Object firstCol = row != null ? row.get(0) : null;
+                String firstColStr = firstCol != null ? firstCol.toString().trim() : "";
+                if (row == null || row.isEmpty() || firstColStr.isEmpty()) {
+                    log.debug("[ReportEngine] PL Sheet 跳过空行 i={}，第一列值='{}'", i, firstColStr);
+                    continue;
+                }
+                // 检查是否是关联销售明细等额外内容（通过关键词判断）
+                if (firstColStr.contains("根据访谈") || firstColStr.contains("关联销售")) {
+                    log.info("[ReportEngine] PL Sheet 遇到非数据行，停止截取: '{}'", firstColStr);
+                    break;
+                }
                 // 只保留前3列（项目/公式/金额），忽略多余列
                 List<Object> line = new ArrayList<>();
                 for (int col = 0; col < 3; col++) {
-                    line.add(row.getOrDefault(col, ""));
+                    Object val = row.getOrDefault(col, "");
+                    // 处理数字格式：将 BigDecimal/Double 格式化为标准数字字符串
+                    if (val instanceof java.math.BigDecimal) {
+                        val = formatNumber((java.math.BigDecimal) val);
+                    } else if (val instanceof Double || val instanceof Float) {
+                        val = formatNumber(((Number) val).doubleValue());
+                    } else if (val instanceof String) {
+                        // 处理会计格式的负数：(2,200.00) -> -2,200.00
+                        val = convertAccountingNumber((String) val);
+                    }
+                    line.add(val);
                 }
+                log.debug("[ReportEngine] PL Sheet 添加数据行 i={}，第一列='{}'", i, firstColStr);
                 result.add(line);
+                dataCount++;
             }
-            log.debug("[ReportEngine] PL Sheet '{}' 截取数据行 {}~{}，共 {} 行", sheetName, dataStart, dataEnd - 1, result.size() - 1);
+            log.info("[ReportEngine] PL Sheet '{}' 截取完成，共 {} 行数据（含表头）", sheetName, result.size());
             return result;
         }
 
@@ -562,29 +634,54 @@ public class ReportGenerateEngine {
      * @return 数据行列表，每行为 Map&lt;字段名, 值&gt;
      */
     private List<Map<String, Object>> extractOrgStructureData(List<Map<Integer, Object>> rows) {
-        if (rows.size() < 7) {
+        if (rows.size() < 5) {
             log.warn("[ReportEngine-RowTpl] Sheet '1 组织结构及管理架构' 行数不足，无法提取行模板数据");
             return Collections.emptyList();
         }
 
-        // 1. 解析行5（0-based index=5）为表头行，构建 colIdx→字段名 Map
+        // 1. 解析行3（0-based index=3）为表头行，构建 colIdx→规范字段名 Map
+        //    EasyExcel 跳过完全空行后，实际行序为:
+        //    index=0 公司名, index=1 附件标题, index=2 说明文字, index=3 大表头, index=4 子表头, index=5+ 数据行
+        //    列名可能带追加说明，如“人数（截至【年度】年12月31日）”，需截取括号/换行前的部分
         Map<Integer, String> colNameMap = new LinkedHashMap<>();
-        Map<Integer, Object> headerRow = rows.get(5);
+        Map<Integer, Object> headerRow = rows.get(3);
         for (Map.Entry<Integer, Object> entry : headerRow.entrySet()) {
             String colName = entry.getValue() != null ? entry.getValue().toString().trim() : "";
             if (!colName.isEmpty()) {
-                colNameMap.put(entry.getKey(), colName);
+                // 截取第一个全角括号、半角括号或换行前的部分
+                int cutAt = colName.length();
+                int p1 = colName.indexOf('（'); // 全角左括号
+                int p2 = colName.indexOf('(');   // 半角左括号
+                int p3 = colName.indexOf('\n');  // 换行
+                if (p1 >= 0 && p1 < cutAt) cutAt = p1;
+                if (p2 >= 0 && p2 < cutAt) cutAt = p2;
+                if (p3 >= 0 && p3 < cutAt) cutAt = p3;
+                String normalized = colName.substring(0, cutAt).trim();
+                colNameMap.put(entry.getKey(), normalized.isEmpty() ? colName : normalized);
             }
         }
-        log.debug("[ReportEngine-RowTpl] Sheet '1 组织结构及管理架构' 表头解析：{}", colNameMap);
+        log.debug("[ReportEngine-RowTpl] Sheet '1 组织结构及管理架构' 表头解析（规范化后）：{}", colNameMap);
 
-        // 2. 从行6（0-based index=6）起扫描数据行，col0（主要部门列）非空则为有效数据行
+        // 2. 从行5（0-based index=5）起扫描数据行
+        //    index=4 为子表头行（汇报对象 / 汇报对象主要办公所在地），需跳过
+        //    col0（主要部门列）非空且非"总计"则为有效数据行
         List<Map<String, Object>> result = new ArrayList<>();
-        for (int i = 6; i < rows.size(); i++) {
+        for (int i = 5; i < rows.size(); i++) {
             Map<Integer, Object> row = rows.get(i);
             Object col0 = row.get(0);
             if (col0 == null || col0.toString().trim().isEmpty()) {
                 continue; // 部门名称为空，跳过
+            }
+            String col0Str = col0.toString().trim();
+            // 如果人数列（通常是col1）为空，说明是表格外部的提示行，跳过
+            Object col1 = row.get(1);
+            if (col1 == null || col1.toString().trim().isEmpty()) {
+                // 但如果是"总计"行，人数列应该有值，所以这里跳过的是非数据行
+                // 继续检查是否是总计行（可能人数列在别的位置）
+                boolean isTotal = col0Str.contains("总计") || col0Str.contains("合计") || col0Str.contains("小计");
+                if (!isTotal) {
+                    continue; // 不是总计行且人数为空，跳过
+                }
             }
             // 按 colNameMap 提取所有列，输出字段名→值的 Map
             Map<String, Object> rowMap = new LinkedHashMap<>();
@@ -592,6 +689,10 @@ public class ReportGenerateEngine {
                 Object val = row.get(colEntry.getKey());
                 rowMap.put(colEntry.getValue(), val != null ? val.toString().trim() : "");
             }
+            // 首列含"总计"/"合计"/"小计" → subtotal 类型，否则 data 类型
+            String rowType = (col0Str.contains("总计") || col0Str.contains("合计") || col0Str.contains("小计"))
+                    ? "subtotal" : "data";
+            rowMap.put("_rowType", rowType);
             result.add(rowMap);
         }
         log.debug("[ReportEngine-RowTpl] Sheet '1 组织结构及管理架构' 数据提取完成，共 {} 行", result.size());
@@ -787,7 +888,8 @@ public class ReportGenerateEngine {
         log.debug("[ReportEngine-RowTpl] Sheet '关联交易汇总表' 表头解析：{}", colNameMap);
 
         // 2. 从行2（0-based index=2）起扫描数据行，行1为副表头跳过
-        //    col0（关联交易类型）非空且不等于"合计"则为有效数据行
+        //    col0（关联交易类型）非空则为有效数据行
+        //    包含"合计"的行标记为 subtotal 类型
         List<Map<String, Object>> result = new ArrayList<>();
         for (int i = 2; i < rows.size(); i++) {
             Map<Integer, Object> row = rows.get(i);
@@ -796,13 +898,14 @@ public class ReportGenerateEngine {
                 continue;
             }
             String col0Str = col0.toString().trim();
-            if ("合计".equals(col0Str)) {
-                continue;
-            }
             Map<String, Object> rowMap = new LinkedHashMap<>();
             for (Map.Entry<Integer, String> colEntry : colNameMap.entrySet()) {
                 Object val = row.get(colEntry.getKey());
                 rowMap.put(colEntry.getValue(), val != null ? val.toString().trim() : "");
+            }
+            // 标记行类型：包含"合计"的为 subtotal，否则为 data
+            if (col0Str.contains("合计")) {
+                rowMap.put("_rowType", "subtotal");
             }
             result.add(rowMap);
         }
@@ -1502,25 +1605,33 @@ public class ReportGenerateEngine {
             // 在文档表格中查找标记
             boolean found = false;
             for (XWPFTable table : doc.getTables()) {
+                // 直接操作 CT 层读取文本，避免 POI 缓存失效
+                boolean tableMatched = false;
+                XWPFTableCell matchedCell = null;
+                outer:
                 for (XWPFTableRow row : table.getRows()) {
                     for (XWPFTableCell cell : row.getTableCells()) {
-                        String cellText = cell.getText();
-                        if (cellText != null && cellText.contains(marker)) {
-                            // 清除标记单元格内容
-                            clearCellText(cell, marker);
-                            // 检测该表格是否存在行模板标记（{{_tpl_}}），有则走克隆路径
-                            boolean hasRowTemplate = tableHasRowTemplateMarker(table);
-                            if (hasRowTemplate) {
-                                fillTableByRowTemplate(table, data);
-                            } else {
-                                // 填充数据到该表格（从第二行开始追加，第一行保留为表头）
-                                fillTableWithData(table, data);
-                            }
-                            found = true;
-                            break;
-                        }
+                        CTTc ctTc = cell.getCTTc();
+                        StringBuilder sb = new StringBuilder();
+                        for (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTP p : ctTc.getPArray())
+                            for (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR r : p.getRArray())
+                                for (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText t : r.getTArray())
+                                    if (t.getStringValue() != null) sb.append(t.getStringValue());
+                        if (sb.toString().contains(marker)) { matchedCell = cell; tableMatched = true; break outer; }
                     }
-                    if (found) break;
+                }
+                if (tableMatched && matchedCell != null) {
+                    // 清除标记单元格内容
+                    clearCellText(matchedCell, marker);
+                    // 检测该表格是否存在行模板标记（{{_tpl_}}），有则走克隆路径
+                    boolean hasRowTemplate = tableHasRowTemplateMarker(table);
+                    if (hasRowTemplate) {
+                        fillTableByRowTemplate(table, data);
+                    } else {
+                        // 填充数据到该表格（从第二行开始追加，第一行保留为表头）
+                        fillTableWithData(table, data);
+                    }
+                    found = true;
                 }
                 if (found) break;
             }
@@ -1579,18 +1690,27 @@ public class ReportGenerateEngine {
         if (data.isEmpty()) return;
 
         // 取表格已有列数作为上限（防止数据列数超出模板表格列数）
-        int tableColCount = table.getRows().isEmpty() ? Integer.MAX_VALUE
+        int tableRowCount = table.getRows().size();
+        int tableColCount = tableRowCount == 0 ? Integer.MAX_VALUE
                 : table.getRow(0).getTableCells().size();
 
-        int startDataRow = 1; // 跳过表头
+        // TABLE_CLEAR_FULL 类型：data[0] 是实际表头，需要填充到表格第一行
+        // 其他类型：data[0] 是虚拟表头，跳过
+        int startDataRow = 0; // 从第0行开始，包含表头
+        log.info("[ReportEngine] fillTableWithData: 表格原有 {} 行, 数据共 {} 行(含表头), 从第 {} 行开始填充",
+                tableRowCount, data.size(), startDataRow);
+
         for (int i = startDataRow; i < data.size(); i++) {
             List<Object> dataRow = data.get(i);
             XWPFTableRow tableRow;
             // 复用已有行或新增行
+            // 注意：i 是数据索引，表格行索引应该也是 i（因为 data[0] 是表头，对应 table.getRow(0)）
             if (i < table.getRows().size()) {
                 tableRow = table.getRow(i);
+                log.debug("[ReportEngine] 复用表格第 {} 行", i);
             } else {
                 tableRow = table.createRow();
+                log.debug("[ReportEngine] 创建新行，当前表格共 {} 行", table.getRows().size());
             }
 
             // 截断：最多写入 tableColCount 列
@@ -1602,7 +1722,8 @@ public class ReportGenerateEngine {
                 } else {
                     cell = tableRow.addNewTableCell();
                 }
-                String cellVal = dataRow.get(j) != null ? dataRow.get(j).toString() : "";
+                Object dataVal = dataRow.get(j);
+                String cellVal = dataVal != null ? dataVal.toString() : "";
                 // 清空并写入
                 if (!cell.getParagraphs().isEmpty()) {
                     XWPFParagraph para = cell.getParagraphs().get(0);
@@ -1614,6 +1735,7 @@ public class ReportGenerateEngine {
                 }
             }
         }
+        log.info("[ReportEngine] fillTableWithData 完成，表格现在有 {} 行", table.getRows().size());
     }
 
     /**
@@ -1635,15 +1757,56 @@ public class ReportGenerateEngine {
     }
 
     /**
+     * 格式化数字为字符串，保留标准数字格式（负数显示为 -X.XX，而非 (X.XX)）。
+     */
+    private String formatNumber(java.math.BigDecimal value) {
+        if (value == null) return "";
+        // 使用标准数字格式，不使用会计格式
+        java.text.DecimalFormat df = new java.text.DecimalFormat("#,##0.00");
+        df.setNegativePrefix("-");
+        return df.format(value);
+    }
+
+    private String formatNumber(double value) {
+        java.text.DecimalFormat df = new java.text.DecimalFormat("#,##0.00");
+        df.setNegativePrefix("-");
+        return df.format(value);
+    }
+
+    /**
+     * 转换会计格式的数字字符串为标准格式。
+     * <p>
+     * 会计格式使用括号表示负数，如 (2,200.00) 表示 -2,200.00
+     * 此方法将会计格式转换为标准负数格式。
+     * </p>
+     *
+     * @param value 会计格式的数字字符串，如 "(2,200.00)" 或 "1,000.00"
+     * @return 标准格式的数字字符串，如 "-2,200.00" 或 "1,000.00"
+     */
+    private String convertAccountingNumber(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return value;
+        }
+        String trimmed = value.trim();
+        // 检查是否是会计格式的负数：(数字)
+        if (trimmed.startsWith("(") && trimmed.endsWith(")")) {
+            // 去掉括号，添加负号前缀
+            String numberPart = trimmed.substring(1, trimmed.length() - 1);
+            return "-" + numberPart;
+        }
+        // 如果不是会计格式，直接返回原值
+        return value;
+    }
+
+    /**
      * 检测表格中是否存在行模板标记（单元格文本含 "{{_tpl_" 前缀）。
      */
     private boolean tableHasRowTemplateMarker(XWPFTable table) {
-        for (XWPFTableRow row : table.getRows()) {
-            for (XWPFTableCell cell : row.getTableCells()) {
-                String text = cell.getText();
-                if (text != null && text.contains("{{_tpl_")) {
-                    return true;
-                }
+        // 直接操作 CT 层，避免 POI 缓存失效导致 XmlValueDisconnectedException
+        CTTbl ctTbl = table.getCTTbl();
+        for (int i = 0; i < ctTbl.sizeOfTrArray(); i++) {
+            if (getCtRowText(ctTbl.getTrArray(i)).contains("{{_tpl_")) {
+                return true;
             }
         }
         return false;
@@ -1718,52 +1881,20 @@ public class ReportGenerateEngine {
                 setCellText(newCells.get(ci), "");
             }
 
-            // 将新行 CTRow 插入到 CTTbl 中模板行之前
+            // 将新行 CTRow 插入到 CTTbl 中模板行之前（使用 CTTbl trArray，避免 XmlValueDisconnectedException）
             int insertPos = tplRowIdx + insertedCount;
-            // 通过 CTTbl 的 insertNewTr 在指定位置插入，然后将克隆的 CTRow 内容拷贝过去
-            // 由于 Apache POI 没有直接的"在指定位置插入已有CTRow"API，
-            // 使用 xmlbeans 的 selectPath / domNode 方式操作
-            org.w3c.dom.Node tblNode = ctTbl.getDomNode();
-            org.w3c.dom.NodeList trNodes = tblNode.getChildNodes();
-            // 找到第 insertPos 个 <w:tr> 节点
-            int trCount = 0;
-            org.w3c.dom.Node refNode = null;
-            for (int ni = 0; ni < trNodes.getLength(); ni++) {
-                org.w3c.dom.Node n = trNodes.item(ni);
-                if ("w:tr".equals(n.getNodeName())) {
-                    if (trCount == insertPos) {
-                        refNode = n;
-                        break;
-                    }
-                    trCount++;
-                }
+            int curSize = ctTbl.sizeOfTrArray();
+            ctTbl.addNewTr();
+            for (int si = curSize; si > insertPos; si--) {
+                ctTbl.setTrArray(si, ctTbl.getTrArray(si - 1));
             }
-            org.w3c.dom.Node newTrNode = newCt.getDomNode();
-            // importNode 以确保节点属于同一 Document
-            org.w3c.dom.Node imported = tblNode.getOwnerDocument().importNode(newTrNode, true);
-            if (refNode != null) {
-                tblNode.insertBefore(imported, refNode);
-            } else {
-                tblNode.appendChild(imported);
-            }
+            ctTbl.setTrArray(insertPos, newCt);
             insertedCount++;
         }
 
-        // 3. 删除原始模板行（其在 CTTbl 中的位置已向后移了 insertedCount 个）
+        // 3. 删除原始模板行（使用 CTTbl removeTr，避免 XmlValueDisconnectedException）
         int realTplIdx = tplRowIdx + insertedCount;
-        org.w3c.dom.Node tblNode2 = ctTbl.getDomNode();
-        org.w3c.dom.NodeList trNodes2 = tblNode2.getChildNodes();
-        int trCount2 = 0;
-        for (int ni = 0; ni < trNodes2.getLength(); ni++) {
-            org.w3c.dom.Node n = trNodes2.item(ni);
-            if ("w:tr".equals(n.getNodeName())) {
-                if (trCount2 == realTplIdx) {
-                    tblNode2.removeChild(n);
-                    break;
-                }
-                trCount2++;
-            }
-        }
+        ctTbl.removeTr(realTplIdx);
 
         log.info("[ReportEngine-RowTemplate] 行模板克隆完成：模板行idx={}，克隆插入 {} 行，数据行数={}",
                 tplRowIdx, insertedCount, data.size() - 1);
@@ -1778,12 +1909,12 @@ public class ReportGenerateEngine {
      */
     private boolean tableHasRowTemplateMarkerFor(XWPFTable table, String phName) {
         String tplMarker = "{{_tpl_" + phName + "}}";
-        for (XWPFTableRow row : table.getRows()) {
-            for (XWPFTableCell cell : row.getTableCells()) {
-                String text = cell.getText();
-                if (text != null && text.contains(tplMarker)) {
-                    return true;
-                }
+        // 直接操作 CT 层，避免 POI 缓存失效导致 XmlValueDisconnectedException
+        CTTbl ctTbl = table.getCTTbl();
+        for (int i = 0; i < ctTbl.sizeOfTrArray(); i++) {
+            String rowText = getCtRowText(ctTbl.getTrArray(i));
+            if (rowText.contains(tplMarker)) {
+                return true;
             }
         }
         return false;
@@ -1812,8 +1943,13 @@ public class ReportGenerateEngine {
 
         CTTbl ctTbl = table.getCTTbl();
 
+        // -----------------------------------------------------------------------
+        // 工具：从 CTRow 读取所有 cell 的纯文本（拼接）
+        // 全程使用 CT 层操作，不依赖 XWPFTableRow/XWPFTableCell 缓存对象，
+        // 避免 setTrArray 后 POI 缓存失效引发 XmlValueDisconnectedException
+        // -----------------------------------------------------------------------
+
         // 1. 扫描所有行，识别模板行（data/group/subtotal），记录每行的类型和索引
-        //    与反向生成的逻辑对应：保留原表格所有行，每行都有占位符
         class RowInfo {
             int idx;
             String type; // "data", "group", "subtotal"
@@ -1824,26 +1960,22 @@ public class ReportGenerateEngine {
         }
         List<RowInfo> allTplRows = new ArrayList<>();
 
-        for (int i = 0; i < table.getRows().size(); i++) {
-            XWPFTableRow row = table.getRow(i);
-            String rowText = row.getTableCells().stream()
-                    .map(c -> c.getText() != null ? c.getText() : "")
-                    .reduce("", String::concat);
+        for (int i = 0; i < ctTbl.sizeOfTrArray(); i++) {
+            CTRow ctRow = ctTbl.getTrArray(i);
+            String rowText = getCtRowText(ctRow);
 
             String rowType = null;
-            if (rowText.contains("{{_tpl_") || rowText.contains("{{_row_data}}")) {
-                rowType = "data";
+            // 优先级：subtotal > group > data（避免同时包含_tpl_和_row_subtotal的行被误判为data）
+            if (rowText.contains("{{_row_subtotal}}")) {
+                rowType = "subtotal";
             } else if (rowText.contains("{{_row_group}}")) {
                 rowType = "group";
-            } else if (rowText.contains("{{_row_subtotal}}")) {
-                rowType = "subtotal";
+            } else if (rowText.contains("{{_tpl_") || rowText.contains("{{_row_data}}")) {
+                rowType = "data";
             }
 
             if (rowType != null) {
-                List<String> colFields = new ArrayList<>();
-                for (XWPFTableCell cell : row.getTableCells()) {
-                    colFields.add(extractColFieldName(cell.getText()));
-                }
+                List<String> colFields = getCtRowColFields(ctRow);
                 allTplRows.add(new RowInfo(i, rowType, colFields));
             }
         }
@@ -1853,9 +1985,7 @@ public class ReportGenerateEngine {
             return;
         }
 
-        // 2. 动态调整行数：根据数据行数克隆或删除模板行
-        //    策略：使用第一个 data 模板行作为基准，所有数据行都用这个模板克隆
-        //    group/subtotal 行保持原样（假设数据格式与模板一致）
+        // 2. 动态调整行数
         RowInfo dataTpl = allTplRows.stream().filter(r -> "data".equals(r.type)).findFirst().orElse(null);
         if (dataTpl == null) {
             log.warn("[ReportEngine-RowTplMapped] 未找到 data 类型模板行，跳过");
@@ -1863,11 +1993,12 @@ public class ReportGenerateEngine {
         }
 
         int dataRowCount = (int) allTplRows.stream().filter(r -> "data".equals(r.type)).count();
-        int actualDataCount = rowData.size();
+        int actualDataCount = (int) rowData.stream()
+                .filter(m -> !"subtotal".equals(m.get("_rowType")))
+                .count();
 
         log.info("[ReportEngine-RowTplMapped] 模板中 data 行数={}, 实际数据行数={}", dataRowCount, actualDataCount);
 
-        // 收集所有 data 行索引（从后往前处理，避免索引漂移）
         List<Integer> dataRowIdxList = allTplRows.stream()
                 .filter(r -> "data".equals(r.type))
                 .map(r -> r.idx)
@@ -1877,20 +2008,19 @@ public class ReportGenerateEngine {
         int netChange = 0;
 
         if (actualDataCount > dataRowCount) {
-            // 需要克隆：用最后一个 data 模板行克隆 (actualDataCount - dataRowCount) 次
             int needClone = actualDataCount - dataRowCount;
             int lastDataIdx = dataRowIdxList.get(0);
-            XWPFTableRow lastDataRow = table.getRow(lastDataIdx + netChange); // 考虑已插入的偏移
+            // 直接从 CTTbl 取模板行，避免使用 XWPFTableRow 缓存
+            CTRow tplCtRow = ctTbl.getTrArray(lastDataIdx);
 
             for (int i = 0; i < needClone; i++) {
-                CTRow newCt = (CTRow) lastDataRow.getCtRow().copy();
-                int insertPos = lastDataIdx + netChange + 1; // 插入到最后一个 data 行之后
+                CTRow newCt = (CTRow) tplCtRow.copy();
+                int insertPos = lastDataIdx + netChange + 1;
                 insertRowAt(table, newCt, insertPos);
                 netChange++;
             }
             log.debug("[ReportEngine-RowTplMapped] 克隆了 {} 行", needClone);
         } else if (actualDataCount < dataRowCount) {
-            // 需要删除：从后往前删除多余的 data 行
             int needDelete = dataRowCount - actualDataCount;
             for (int i = 0; i < needDelete && i < dataRowIdxList.size(); i++) {
                 int idxToDelete = dataRowIdxList.get(i) + netChange;
@@ -1900,97 +2030,176 @@ public class ReportGenerateEngine {
             log.debug("[ReportEngine-RowTplMapped] 删除了 {} 行", needDelete);
         }
 
-        // 3. 重新扫描所有模板行（因为行数已变化），填充数据
+        // 3. 重新扫描（行数已变化），全程用 CTTbl.getTrArray
         List<RowInfo> finalTplRows = new ArrayList<>();
-        for (int i = 0; i < table.getRows().size(); i++) {
-            XWPFTableRow row = table.getRow(i);
-            String rowText = row.getTableCells().stream()
-                    .map(c -> c.getText() != null ? c.getText() : "")
-                    .reduce("", String::concat);
+        int trArraySize = ctTbl.sizeOfTrArray();
+        log.info("[ReportEngine-RowTplMapped] 重新扫描，ctTbl.sizeOfTrArray()={}", trArraySize);
+        for (int i = 0; i < trArraySize; i++) {
+            CTRow ctRow = ctTbl.getTrArray(i);
+            String rowText = getCtRowText(ctRow);
+            log.info("[ReportEngine-RowTplMapped] 扫描行{}: text={}", i, rowText.substring(0, Math.min(100, rowText.length())));
 
             String rowType = null;
-            if (rowText.contains("{{_tpl_") || rowText.contains("{{_row_data}}")) {
-                rowType = "data";
+            // 优先级：subtotal > group > data（避免同时包含_tpl_和_row_subtotal的行被误判为data）
+            if (rowText.contains("{{_row_subtotal}}")) {
+                rowType = "subtotal";
             } else if (rowText.contains("{{_row_group}}")) {
                 rowType = "group";
-            } else if (rowText.contains("{{_row_subtotal}}")) {
-                rowType = "subtotal";
+            } else if (rowText.contains("{{_tpl_") || rowText.contains("{{_row_data}}")) {
+                rowType = "data";
             }
 
             if (rowType != null) {
-                List<String> colFields = new ArrayList<>();
-                for (XWPFTableCell cell : row.getTableCells()) {
-                    colFields.add(extractColFieldName(cell.getText()));
-                }
+                List<String> colFields = getCtRowColFields(ctRow);
                 finalTplRows.add(new RowInfo(i, rowType, colFields));
+                log.info("[ReportEngine-RowTplMapped] 识别到 {} 行，索引={}", rowType, i);
             }
         }
 
-        // 4. 填充数据
+        // 4. 填充数据（直接操作 CTRow）
         int dataIdx = 0;
         for (RowInfo info : finalTplRows) {
-            XWPFTableRow row = table.getRow(info.idx);
+            CTRow ctRow = ctTbl.getTrArray(info.idx);
 
-            if ("data".equals(info.type) && dataIdx < rowData.size()) {
-                Map<String, Object> dataMap = rowData.get(dataIdx);
-                fillRowWithData(row, info.colFields, dataMap);
-                dataIdx++;
-            } else if ("data".equals(info.type)) {
-                // 多余的 data 行（不应该发生，但保险起见清空）
-                fillRowWithData(row, info.colFields, Collections.emptyMap());
+            if ("data".equals(info.type)) {
+                while (dataIdx < rowData.size() && "subtotal".equals(rowData.get(dataIdx).get("_rowType"))) {
+                    dataIdx++;
+                }
+                if (dataIdx < rowData.size()) {
+                    fillCtRowWithData(ctRow, info.colFields, rowData.get(dataIdx));
+                    dataIdx++;
+                } else {
+                    fillCtRowWithData(ctRow, info.colFields, Collections.emptyMap());
+                }
+            } else if ("subtotal".equals(info.type)) {
+                rowData.stream()
+                        .filter(m -> "subtotal".equals(m.get("_rowType")))
+                        .findFirst()
+                        .ifPresent(subtotalData -> fillCtRowWithData(ctRow, info.colFields, subtotalData));
             }
-            // group/subtotal 行保持原样（或者可以填充汇总数据，如果需要的话）
+            // group 行保持原样
         }
 
-        log.info("[ReportEngine-RowTplMapped] 行模板填充完成：处理了 {} 个模板行，填充了 {} 行数据",
-                finalTplRows.size(), dataIdx);
+        log.info("[ReportEngine-RowTplMapped] 行模板填充完成：处理了 {} 个模板行，填充了 {} 行数据，finalTplRows包含subtotal={}",
+                finalTplRows.size(), dataIdx,
+                finalTplRows.stream().anyMatch(r -> "subtotal".equals(r.type)));
+    }
+
+    /** 从 CTRow 中读取所有 cell 文本拼接成字符串（CT层，不依赖 POI 缓存） */
+    private String getCtRowText(CTRow ctRow) {
+        StringBuilder sb = new StringBuilder();
+        for (CTTc ctTc : ctRow.getTcArray()) {
+            for (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTP ctp : ctTc.getPArray()) {
+                for (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR ctr : ctp.getRArray()) {
+                    for (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText t : ctr.getTArray()) {
+                        if (t.getStringValue() != null) sb.append(t.getStringValue());
+                    }
+                }
+            }
+        }
+        return sb.toString();
+    }
+
+    /** 从 CTRow 每个 cell 中提取 {{_col_字段名}}，返回按列顺序的字段名列表 */
+    private List<String> getCtRowColFields(CTRow ctRow) {
+        List<String> fields = new ArrayList<>();
+        for (CTTc ctTc : ctRow.getTcArray()) {
+            StringBuilder cellText = new StringBuilder();
+            for (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTP ctp : ctTc.getPArray()) {
+                for (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR ctr : ctp.getRArray()) {
+                    for (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText t : ctr.getTArray()) {
+                        if (t.getStringValue() != null) cellText.append(t.getStringValue());
+                    }
+                }
+            }
+            fields.add(extractColFieldName(cellText.toString()));
+        }
+        return fields;
+    }
+
+    /** 向 CTRow 中按字段名填充数据（CT层，不依赖 POI 缓存） */
+    private void fillCtRowWithData(CTRow ctRow, List<String> colFields, Map<String, Object> dataMap) {
+        CTTc[] cells = ctRow.getTcArray();
+        int limit = Math.min(cells.length, colFields.size());
+        for (int ci = 0; ci < limit; ci++) {
+            String fieldName = colFields.get(ci);
+            String val = "";
+            if (fieldName != null && dataMap.containsKey(fieldName)) {
+                Object v = dataMap.get(fieldName);
+                val = v != null ? v.toString() : "";
+            }
+            setCtCellText(cells[ci], val);
+        }
+    }
+
+    /** 向 CTTc 写入文本（保留第一个 run 的格式和段落属性，清除占位符内容） */
+    private void setCtCellText(CTTc ctTc, String value) {
+        org.openxmlformats.schemas.wordprocessingml.x2006.main.CTP[] paras = ctTc.getPArray();
+        
+        for (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTP ctp : paras) {
+            // 保存段落的属性（PPr）
+            org.openxmlformats.schemas.wordprocessingml.x2006.main.CTPPr pPr = ctp.getPPr();
+            
+            org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR[] runs = ctp.getRArray();
+            if (runs.length == 0) {
+                // 没有 run，新建一个
+                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR newRun = ctp.addNewR();
+                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText newT = newRun.addNewT();
+                newT.setStringValue(value);
+                continue;
+            }
+            
+            // 保留第一个 run，设置文本值
+            org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR firstRun = runs[0];
+            org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText[] texts = firstRun.getTArray();
+            if (texts.length > 0) {
+                texts[0].setStringValue(value);
+                // 清除同一 run 内其余 t
+                for (int ti = 1; ti < texts.length; ti++) texts[ti].setStringValue("");
+            } else {
+                // run 无 t 节点，新建一个
+                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText newT = firstRun.addNewT();
+                newT.setStringValue(value);
+            }
+            
+            // 删除多余的 run（从后往前删，避免索引变化）
+            for (int ri = runs.length - 1; ri > 0; ri--) {
+                ctp.removeR(ri);
+            }
+            
+            // 确保段落属性被保留（如果之前没有，尝试设置默认的垂直对齐）
+            if (pPr != null && ctp.getPPr() == null) {
+                ctp.setPPr(pPr);
+            }
+        }
+        
+        // 确保单元格的垂直对齐属性被保留
+        // CTTcPr 包含 vAlign 属性，控制单元格内容的垂直对齐
+        if (ctTc.getTcPr() != null) {
+            // 单元格属性已存在，保留它
+            // vAlign 属性控制垂直对齐：top, center, bottom
+        }
     }
 
     /**
-     * 在指定位置插入新行
+     * 在指定位置插入新行（使用 CTTbl trArray 操作，避免 XmlValueDisconnectedException）
      */
     private void insertRowAt(XWPFTable table, CTRow newCt, int pos) {
         CTTbl ctTbl = table.getCTTbl();
-        org.w3c.dom.Node tblNode = ctTbl.getDomNode();
-        org.w3c.dom.NodeList trNodes = tblNode.getChildNodes();
-        int trCount = 0;
-        org.w3c.dom.Node refNode = null;
-        for (int ni = 0; ni < trNodes.getLength(); ni++) {
-            org.w3c.dom.Node n = trNodes.item(ni);
-            if ("w:tr".equals(n.getNodeName())) {
-                if (trCount == pos) {
-                    refNode = n;
-                    break;
-                }
-                trCount++;
-            }
+        int size = ctTbl.sizeOfTrArray();
+        // 先追加一个空行占位，再逐行后移腾出 pos 位置
+        ctTbl.addNewTr();
+        for (int i = size; i > pos; i--) {
+            ctTbl.setTrArray(i, ctTbl.getTrArray(i - 1));
         }
-        org.w3c.dom.Node imported = tblNode.getOwnerDocument().importNode(newCt.getDomNode(), true);
-        if (refNode != null) {
-            tblNode.insertBefore(imported, refNode);
-        } else {
-            tblNode.appendChild(imported);
-        }
+        ctTbl.setTrArray(pos, newCt);
     }
 
     /**
-     * 删除指定位置的行
+     * 删除指定位置的行（使用 CTTbl removeTr 操作，避免 XmlValueDisconnectedException）
      */
     private void removeRowAt(XWPFTable table, int pos) {
-        CTTbl ctTbl = table.getCTTbl();
-        org.w3c.dom.Node tblNode = ctTbl.getDomNode();
-        org.w3c.dom.NodeList trNodes = tblNode.getChildNodes();
-        int trCount = 0;
-        for (int ni = 0; ni < trNodes.getLength(); ni++) {
-            org.w3c.dom.Node n = trNodes.item(ni);
-            if ("w:tr".equals(n.getNodeName())) {
-                if (trCount == pos) {
-                    tblNode.removeChild(n);
-                    break;
-                }
-                trCount++;
-            }
-        }
+        table.getCTTbl().removeTr(pos);
     }
 
     /**
@@ -2085,8 +2294,9 @@ public class ReportGenerateEngine {
     /**
      * 获取指定占位符的 column_defs（企业级优先，系统级居底，最终默认 ["#","COMPANY"]）。
      * 从 PlaceholderRegistryService 获取有效注册表，找到对应条目的 columnDefs。
+     * 注意：占位符名（ph.getName()）存的是展示名，应按 displayName 匹配。
      *
-     * @param placeholderName 占位符名称
+     * @param placeholderName 占位符展示名（如“关联交易汇总”）
      * @param companyId       企业ID（null 时只查系统级）
      * @return 有效的 column_defs 列表
      */
@@ -2097,7 +2307,8 @@ public class ReportGenerateEngine {
                 List<com.fileproc.report.service.ReverseTemplateEngine.RegistryEntry> registry =
                         placeholderRegistryService.getEffectiveRegistry(companyId);
                 for (com.fileproc.report.service.ReverseTemplateEngine.RegistryEntry entry : registry) {
-                    if (placeholderName.equals(entry.getPlaceholderName())
+                    // 按 displayName 匹配（ph.getName() 存的是展示名）
+                    if (placeholderName.equals(entry.getDisplayName())
                             && entry.getColumnDefs() != null
                             && !entry.getColumnDefs().isEmpty()) {
                         log.debug("[ReportEngine] 占位符 '{}' columnDefs 来自注册表: {}", placeholderName, entry.getColumnDefs());
@@ -2108,7 +2319,7 @@ public class ReportGenerateEngine {
                 log.warn("[ReportEngine] 读取注册表 columnDefs 失败，使用默认值: {}", e.getMessage());
             }
         }
-        // 兜底：系统默认只填 # 和 COMPANY
+        // 居底：系统默认只填 # 和 COMPANY
         return List.of("#", "COMPANY");
     }
 
