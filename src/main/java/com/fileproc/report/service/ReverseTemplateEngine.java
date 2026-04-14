@@ -259,14 +259,19 @@ public class ReverseTemplateEngine {
                 List.of("组织结构", "部门结构", "管理架构", "组织架构"),
                 List.of("主要部门", "人数", "主要职责范围"),
                 List.of("主要部门", "人数", "主要职责范围", "汇报对象", "汇报对象主要办公所在")));
+        // 关联采购明细：4列结构（第1列group标题，第2-4列数据）
+        // columnDefs包含4个字段，与表格列数一致
         reg.add(new RegistryEntry("清单模板-4_供应商清单-关联采购明细", "关联采购明细",
                 PlaceholderType.TABLE_ROW_TEMPLATE, "list", "4 供应商清单", null,
                 List.of("关联采购交易明细", "关联采购明细表", "采购交易明细表"),
-                List.of("供应商名称", "金额（人民币）", "占关联采购总金额比例")));
+                List.of("_group_title", "供应商名称", "金额（人民币）", "占关联采购总金额比例"),
+                List.of("_group_title", "供应商名称", "金额（人民币）", "占关联采购总金额比例")));
+        // 关联销售明细：4列结构（第1列group标题，第2-4列数据）
         reg.add(new RegistryEntry("清单模板-5_客户清单-关联销售明细", "关联销售明细",
                 PlaceholderType.TABLE_ROW_TEMPLATE, "list", "5 客户清单", null,
                 List.of("关联销售交易明细", "关联销售明细表", "销售交易明细表"),
-                List.of("客户名称", "金额（人民币）", "占营业收入比例")));
+                List.of("_group_title", "客户名称", "金额（人民币）", "占关联销售总金额比例"),
+                List.of("_group_title", "客户名称", "金额（人民币）", "占关联销售总金额比例")));
         // [DEPRECATED] 清单模板-5_客户清单（TABLE_CLEAR_FULL，sourceSheet=null，生成引擎无填充逻辑，暂时废弃；客户数据由 清单模板-5_客户清单-关联销售明细 处理）
         // reg.add(new RegistryEntry("清单模板-5_客户清单",            "客户清单",   PlaceholderType.TABLE_CLEAR_FULL, "list", null, null,
         //         List.of("客户清单", "主要客户", "前五大客户", "主要客户情况")));
@@ -2068,11 +2073,22 @@ public class ReverseTemplateEngine {
                 // 1) BVD_COLUMN_KEYWORD_MAP 英文关键词匹配（适用于 BVD 类）
                 // 2) availableColDefs 直接精确匹配（适用于清单类中文列头）
                 // 3) fallback：回退到注册表默认 columnDefs
-                List<String> inferredColDefs = inferColumnDefsFromWordTable(
-                        targetTable, entry.getColumnDefs(), entry.getAvailableColDefs());
-                if (!inferredColDefs.equals(entry.getColumnDefs())) {
-                    log.info("[ReverseEngine-BVD-TableRow] 占位符 '{}' 列头自动识别结果：{} → 覆盖注册表默认值 {}",
-                            entry.getPlaceholderName(), inferredColDefs, entry.getColumnDefs());
+                // 
+                // 特殊处理：关联采购明细和关联销售明细表格，强制使用注册表的 columnDefs
+                // 因为这些表格有4列结构（第1列是group标题），但Word表头可能只有3列
+                List<String> inferredColDefs;
+                if ("关联采购明细".equals(entry.getDisplayName()) || "关联销售明细".equals(entry.getDisplayName())) {
+                    // 强制使用注册表定义的 columnDefs（包含 _group_title）
+                    inferredColDefs = entry.getColumnDefs();
+                    log.info("[ReverseEngine-BVD-TableRow] 占位符 '{}' 强制使用注册表 columnDefs: {}",
+                            entry.getPlaceholderName(), inferredColDefs);
+                } else {
+                    inferredColDefs = inferColumnDefsFromWordTable(
+                            targetTable, entry.getColumnDefs(), entry.getAvailableColDefs());
+                    if (!inferredColDefs.equals(entry.getColumnDefs())) {
+                        log.info("[ReverseEngine-BVD-TableRow] 占位符 '{}' 列头自动识别结果：{} → 覆盖注册表默认值 {}",
+                                entry.getPlaceholderName(), inferredColDefs, entry.getColumnDefs());
+                    }
                 }
 
                 // 使用displayName生成行模板标记，与生成引擎保持一致
@@ -2095,22 +2111,44 @@ public class ReverseTemplateEngine {
                         return;
                     }
 
+                    // 判断是否是group行
+                    boolean isGroupRow = rowTypeMark.contains("_row_group");
+
                     for (int ci = 0; ci < tplCells2.size(); ci++) {
                         XWPFTableCell cell = tplCells2.get(ci);
 
                         // 跳过垂直合并的延续单元格（这些单元格属于上一行的一部分）
+                        // 但group行的第一列除外，需要写入 {{_col__group_title}}
                         if (isVerticalMergeContinue(cell)) {
-                            log.debug("[ReverseEngine-TableClear] 跳过垂直合并延续单元格 ci={}", ci);
-                            continue;
+                            if (isGroupRow && ci == 0) {
+                                // group行第一列即使是垂直合并延续，也要写入 _group_title
+                                log.debug("[ReverseEngine-TableClear] group行第一列垂直合并延续，写入 _group_title");
+                            } else {
+                                log.debug("[ReverseEngine-TableClear] 跳过垂直合并延续单元格 ci={}", ci);
+                                continue;
+                            }
                         }
 
                         // 列字段名映射：根据 tplCells2.size() 动态调整，处理合并单元格导致的列错位
                         String colMark = "";
                         if (colDefs != null && !colDefs.isEmpty()) {
-                            int sizeDiff = colDefs.size() - tplCells2.size();
-                            int defIdx = ci + sizeDiff;
-                            if (defIdx >= 0 && defIdx < colDefs.size()) {
-                                colMark = "{{_col_" + colDefs.get(defIdx) + "}}";
+                            // 判断是否是特殊表格（关联采购明细、关联销售明细）
+                            boolean isSpecialTable = "关联采购明细".equals(entry.getDisplayName()) 
+                                                  || "关联销售明细".equals(entry.getDisplayName());
+                            
+                            if (isGroupRow && ci == 0) {
+                                // group行第一列：使用 _group_title 显示分组名
+                                colMark = "{{_col__group_title}}";
+                            } else if (isSpecialTable && ci == 0 && "data".equals(rowTypeMark)) {
+                                // 特殊表格的data行第一列：不写占位符（利用Word合并单元格继承特性）
+                                colMark = "";  // 不写入占位符
+                            } else {
+                                int sizeDiff = colDefs.size() - tplCells2.size();
+                                int defIdx = ci + sizeDiff;
+                                if (defIdx >= 0 && defIdx < colDefs.size()) {
+                                    String fieldName = colDefs.get(defIdx);
+                                    colMark = "{{_col_" + fieldName + "}}";
+                                }
                             }
                         }
                         final String writeText;
@@ -2576,9 +2614,15 @@ public class ReverseTemplateEngine {
     private List<RegistryEntry> detectUnmatchedRegistry(List<MatchedPlaceholder> matchedList,
                                                          List<ExcelEntry> tableClearUnmatched) {
         // 收集所有已处理的占位符名称（confirmed 或 uncertain 均算"已处理"）
-        Set<String> processedNames = matchedList.stream()
-                .map(MatchedPlaceholder::getPlaceholderName)
-                .collect(Collectors.toSet());
+        // 注意：matchedList 中存储的可能是 displayName（如"关联采购明细"），
+        // 而注册表中使用的是 placeholderName（如"清单模板-4_供应商清单-关联采购明细"）
+        // 需要同时收集两种名称
+        Set<String> processedNames = new java.util.HashSet<>();
+        for (MatchedPlaceholder mp : matchedList) {
+            if (mp.getPlaceholderName() != null) {
+                processedNames.add(mp.getPlaceholderName());
+            }
+        }
 
         // TABLE_CLEAR 未定位的条目名称集合
         Set<String> tableClearUnmatchedNames = tableClearUnmatched.stream()
@@ -2594,8 +2638,10 @@ public class ReverseTemplateEngine {
                 continue;
             }
             // 其他类型：在 matchedList 中找不到 → 加入未匹配
+            // 同时检查 placeholderName 和 displayName，因为 matchedList 中可能存储的是 displayName
             if (reg.getType() != PlaceholderType.TABLE_CLEAR
-                    && !processedNames.contains(reg.getPlaceholderName())) {
+                    && !processedNames.contains(reg.getPlaceholderName())
+                    && !processedNames.contains(reg.getDisplayName())) {
                 result.add(reg);
             }
         }

@@ -118,19 +118,21 @@ public class ReportAsyncService {
                 .map(ctp -> toPlaceholder(ctp, companyId))
                 .toList());
         
-        // 同时加载注册表中的 TABLE_CLEAR_FULL 类型占位符（如 PL 财务状况表）
+        // 同时加载注册表中的 TABLE_CLEAR_FULL 和 TABLE_ROW_TEMPLATE 类型占位符
+        // TABLE_CLEAR_FULL: 如 PL 财务状况表
+        // TABLE_ROW_TEMPLATE: 如关联采购明细、关联销售明细等
         List<PlaceholderRegistry> registryEntries = placeholderRegistryMapper.selectEffectiveEntries(companyId);
         int addedCount = 0;
         for (PlaceholderRegistry entry : registryEntries) {
-            if ("TABLE_CLEAR_FULL".equals(entry.getPhType())) {
+            if ("TABLE_CLEAR_FULL".equals(entry.getPhType()) || "TABLE_ROW_TEMPLATE".equals(entry.getPhType())) {
                 // 检查是否已存在同名占位符
                 boolean exists = placeholders.stream()
-                        .anyMatch(p -> p.getName().equals(entry.getPlaceholderName()));
+                        .anyMatch(p -> p.getName().equals(entry.getDisplayName()));
                 if (!exists) {
                     placeholders.add(toPlaceholderFromRegistry(entry));
                     addedCount++;
                     log.info("[ReportAsyncService] 添加注册表占位符: name='{}', type='{}', sourceSheet='{}'",
-                            entry.getPlaceholderName(), entry.getPhType(), entry.getSheetName());
+                            entry.getDisplayName(), entry.getPhType(), entry.getSheetName());
                 }
             }
         }

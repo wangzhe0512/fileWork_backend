@@ -123,9 +123,15 @@ public class ReportGenerateEngine {
                     rowTemplateValues.put(ph.getName(), rowData);
                     log.info("[ReportEngine] BVD SummaryYear '{}' 行模板数据提取完成：{} 行，columnDefs={}",
                             ph.getName(), rowData.size(), colDefs);
-                } else if (hasColumnDefs(ph.getName(), ph.getCompanyId())) {
-                    // 行模板克隆类型：注册表有 columnDefs 定义（TABLE_ROW_TEMPLATE），输出 List<Map<字段名,値>>
+                } else if (hasColumnDefs(ph.getName(), ph.getCompanyId())
+                        || "4 供应商清单".equals(ph.getSourceSheet())
+                        || "5 客户清单".equals(ph.getSourceSheet())) {
+                    // 行模板克隆类型：注册表有 columnDefs 定义（TABLE_ROW_TEMPLATE），或供应商/客户清单 Sheet
+                    // 输出 List<Map<字段名,値>>
+                    log.info("[ReportEngine] 调用extractRowTemplateData: placeholderName='{}', sourceSheet='{}'", 
+                            ph.getName(), ph.getSourceSheet());
                     List<Map<String, Object>> rowData = extractRowTemplateData(rows, ph.getSourceSheet(), ph.getName());
+                    log.info("[ReportEngine] extractRowTemplateData返回: rowData.size={}, rowData={}", rowData.size(), rowData);
                     rowTemplateValues.put(ph.getName(), rowData);
                 } else {
                     List<List<Object>> tableData = extractTableData(rows, ph.getSourceSheet());
@@ -494,6 +500,8 @@ public class ReportGenerateEngine {
         Map<Integer, Object> headerRow4 = rows.get(4);
         for (Map.Entry<Integer, Object> entry : headerRow4.entrySet()) {
             String colName = entry.getValue() != null ? entry.getValue().toString().trim() : "";
+            // 清理换行符和多余空格
+            colName = colName.replaceAll("\\s+", " ").trim();
             if (!colName.isEmpty()) {
                 colNameMap.put(entry.getKey(), colName);
             }
@@ -502,11 +510,13 @@ public class ReportGenerateEngine {
         Map<Integer, Object> headerRow5 = rows.get(5);
         for (Map.Entry<Integer, Object> entry : headerRow5.entrySet()) {
             String colName = entry.getValue() != null ? entry.getValue().toString().trim() : "";
+            // 清理换行符和多余空格
+            colName = colName.replaceAll("\\s+", " ").trim();
             if (!colName.isEmpty()) {
                 colNameMap.putIfAbsent(entry.getKey(), colName); // 行5已有的列不覆盖
             }
         }
-        log.debug("[ReportEngine-RowTpl] Sheet '{}' 子表头解析（合并行5+行6）：{}", sheetName, colNameMap);
+        log.info("[ReportEngine-RowTpl] Sheet '{}' 子表头解析（合并行5+行6）：{}", sheetName, colNameMap);
 
         // 找到"名称"列（供应商名称/客户名称等）的列索引：通常在col2，但通过子表头名称动态确定
         // 名称列：colNameMap 中包含"名称"关键词的列
@@ -527,17 +537,56 @@ public class ReportGenerateEngine {
                 .map(Map.Entry::getKey)
                 .findFirst().orElse(5); // fallback col5
 
-        log.debug("[ReportEngine-RowTpl] Sheet '{}' 关键列定位：名称col={}, 金额col={}, 占比col={}",
+        log.info("[ReportEngine-RowTpl] Sheet '{}' 关键列定位：名称col={}, 金额col={}, 占比col={}",
                 sheetName, nameColIdx, amountColIdx, ratioColIdx);
 
-        // 2. 从行9（0-based i=8）起扫描数据，跳过行8的"关联供应商/关联客户"大类标题行
+        // 2. 从行8（0-based i=7）起扫描数据，跳过行7的"关联供应商/关联客户"大类标题行
         //    按原有分组/明细/小计逻辑，输出字段名->值的 Map
         List<Map<String, Object>> result = new ArrayList<>();
         final int finalNameColIdx = nameColIdx;
         final int finalAmountColIdx = amountColIdx;
         final int finalRatioColIdx = ratioColIdx;
+        
+        // 用于跟踪当前分组名称（处理合并单元格的情况）
+        String currentGroupName = "";
+        
+        // ===== 第一步：预扫描，统计每个分组的有效数据行数 =====
+        log.info("[ReportEngine-RowTpl] ===== 开始预扫描，统计分组有效数据 =====");
+        Map<String, Integer> groupDataCount = new LinkedHashMap<>();
+        String tempGroupName = "";
+        
+        for (int j = 0; j < rows.size(); j++) {
+            Map<Integer, Object> row = rows.get(j);
+            Object col0 = row.get(0);
+            Object col1 = row.get(1);
+            Object colName = row.get(finalNameColIdx);
+            
+            String col0Str = col0 != null ? col0.toString().trim() : "";
+            String col1Str = col1 != null ? col1.toString().trim() : "";
+            String colNameStr = colName != null ? colName.toString().trim() : "";
+            
+            // 识别新分组
+            boolean isNewGroup = !col0Str.isEmpty() && 
+                    (col0Str.contains("关联采购") || col0Str.contains("关联销售") || col0Str.contains("关联劳务"));
+            
+            if (isNewGroup) {
+                tempGroupName = col0Str;
+                groupDataCount.put(tempGroupName, 0);
+                log.info("[ReportEngine-RowTpl] 预扫描：发现新分组 '{}'", tempGroupName);
+            }
+            
+            // 统计有效数据行（col1是数字，colName非空）
+            if (!tempGroupName.isEmpty() && col1Str.matches("^\\d+$") && !colNameStr.isEmpty()) {
+                groupDataCount.put(tempGroupName, groupDataCount.get(tempGroupName) + 1);
+            }
+        }
+        
+        log.info("[ReportEngine-RowTpl] ===== 预扫描完成，分组数据统计: {} =====", groupDataCount);
+        
+        // ===== 第二步：正式提取数据，只提取有有效数据的分组 =====
+        boolean skipCurrentGroup = false;
 
-        for (int i = 8; i < rows.size(); i++) {
+        for (int i = 0; i < rows.size(); i++) {
             Map<Integer, Object> row = rows.get(i);
             Object col0 = row.get(0);
             Object col1 = row.get(1);
@@ -546,52 +595,167 @@ public class ReportGenerateEngine {
             String col0Str = col0 != null ? col0.toString().trim() : "";
             String col1Str = col1 != null ? col1.toString().trim() : "";
             String colNameStr = colName != null ? colName.toString().trim() : "";
-
-            // 分组标题行：col0非空，col1为空
-            if (!col0Str.isEmpty() && col1Str.isEmpty() && colNameStr.isEmpty()) {
-                if (col0Str.contains("小计") || col0Str.contains("合计") || col0Str.contains("总计")) {
-                    // 小计/总计行：col0存名称，取金额和占比
-                    Map<String, Object> rowMap = buildRowMap(col0Str,
-                            toPlainString(row.get(finalAmountColIdx)),
-                            toPlainString(row.get(finalRatioColIdx)),
-                            colNameMap, finalNameColIdx, finalAmountColIdx, finalRatioColIdx,
-                            "subtotal");
-                    result.add(rowMap);
+            
+            // 如果col0非空，更新当前分组名称
+            if (!col0Str.isEmpty()) {
+                currentGroupName = col0Str;
+            }
+            
+            // 检查是否是新分组开始，判断是否需要跳过
+            boolean isNewGroup = !col0Str.isEmpty() && 
+                    (col0Str.contains("关联采购") || col0Str.contains("关联销售") || col0Str.contains("关联劳务"));
+            if (isNewGroup) {
+                Integer dataCount = groupDataCount.get(col0Str);
+                if (dataCount == null || dataCount == 0) {
+                    skipCurrentGroup = true;
+                    log.info("[ReportEngine-RowTpl] 分组 '{}' 无有效数据，跳过整个分组", col0Str);
                 } else {
-                    // 纯分组标题行：只有名称
-                    Map<String, Object> rowMap = buildRowMap(col0Str, "", "",
-                            colNameMap, finalNameColIdx, finalAmountColIdx, finalRatioColIdx,
-                            "group");
-                    result.add(rowMap);
+                    skipCurrentGroup = false;
+                    log.info("[ReportEngine-RowTpl] 分组 '{}' 有 {} 条有效数据，开始提取", col0Str, dataCount);
                 }
-                continue;
+            }
+            
+            log.info("[ReportEngine-RowTpl] 扫描Excel行{}: col0='{}', col1='{}', colName='{}', currentGroupName='{}', nameColIdx={}", 
+                    i, col0Str, col1Str, colNameStr, currentGroupName, finalNameColIdx);
+
+            // 首先检查是否进入非关联区域：col0或col1或colName含"非关联"
+            if (col0Str.contains("非关联") || col1Str.contains("非关联") || colNameStr.contains("非关联")) {
+                log.info("[ReportEngine-RowTpl] 遇到非关联数据，停止扫描");
+                break;
             }
 
-            // col1含"小计"/"合计"/"总计"
-            if (!col1Str.isEmpty() && (col1Str.contains("小计") || col1Str.contains("合计") || col1Str.contains("总计"))) {
-                Map<String, Object> rowMap = buildRowMap(col1Str,
+            // === 分组标题行判断 ===
+            // 关键原则：只用 col0Str（当前行A列）判断是否是新分组，不用 currentGroupName
+            // currentGroupName 仅用于跟踪当前属于哪个分组
+            boolean isCol1Empty = col1Str.isEmpty() || "-".equals(col1Str);
+            boolean isCol1SeqNum = col1Str.matches("^\\d+$");
+            
+            // col0 本身含有分组关键词（新分组开始的标志）
+            // 注意：必须精确匹配分组名称，不能只包含关键词，否则会误识别表头行（如"关联供应商"）
+            boolean isCol0GroupKeyword = !col0Str.isEmpty() && 
+                    (col0Str.contains("境外关联采购") || col0Str.contains("境内关联采购") ||
+                     col0Str.contains("境外关联销售") || col0Str.contains("境内关联销售") ||
+                     col0Str.contains("境外关联劳务") || col0Str.contains("境内关联劳务"));
+            
+            // 格式1：col0含分组关键词，col1为空或"-"，colName为空（纯分组标题行，如独立的"境外关联采购"行）
+            boolean isGroupRowCondition = isCol0GroupKeyword && isCol1Empty && colNameStr.isEmpty();
+            // 格式2：col0本身含分组关键词 且 col1有序号（分组行同时含数据，如"境外关联采购 | 1 | KKK"）
+            boolean isGroupRowCondition2 = isCol0GroupKeyword && isCol1SeqNum;
+            
+            // 小计/合计行（col0含关键词）
+            boolean isCol0Subtotal = !col0Str.isEmpty() && 
+                    (col0Str.contains("小计") || col0Str.contains("合计") || col0Str.contains("总计"));
+            // col1也可能含小计关键词（如col0为空时）
+            boolean isCol1Subtotal = !col1Str.isEmpty() && 
+                    (col1Str.contains("小计") || col1Str.contains("合计") || col1Str.contains("总计"));
+            
+            log.info("[ReportEngine-RowTpl] 行{} 判断: col0='{}', col1='{}', colName='{}', currentGroupName='{}', isCol0GroupKeyword={}, isGroupRow={}, isGroupRow2={}, isCol0Subtotal={}, isCol1Subtotal={}", 
+                    i, col0Str, col1Str, colNameStr, currentGroupName, isCol0GroupKeyword, isGroupRowCondition, isGroupRowCondition2, isCol0Subtotal, isCol1Subtotal);
+            
+            // 跳过大类标题行（如"关联供应商"、"关联客户"）：col0非空但不含分组关键词，col1为空
+            if (!col0Str.isEmpty() && !isCol0GroupKeyword && !isCol0Subtotal && isCol1Empty) {
+                log.info("[ReportEngine-RowTpl] 跳过大类标题行: col0='{}'", col0Str);
+                continue;
+            }
+            
+            // 跳过说明文字行：col0很长（超过30字符）且col1为空或不是序号
+            if (!col0Str.isEmpty() && col0Str.length() > 30 && !col1Str.matches("^\\d+$")) {
+                log.info("[ReportEngine-RowTpl] 跳过说明文字行: col0长度={}", col0Str.length());
+                continue;
+            }
+            
+            // 优先处理小计行（包括col0或col1含小计关键词）
+            if (isCol0Subtotal || isCol1Subtotal) {
+                String subtotalName = isCol0Subtotal ? col0Str : col1Str;
+                
+                // 判断是否是总计行（如"关联采购小计"、"关联销售小计"）
+                // 总计行不受skipCurrentGroup影响，应该始终提取
+                boolean isTotalSubtotal = subtotalName.equals("关联采购小计") || subtotalName.equals("关联销售小计");
+                
+                if (!isTotalSubtotal && skipCurrentGroup) {
+                    log.info("[ReportEngine-RowTpl] 跳过小计行（分组无数据）: col0='{}', col1='{}'", col0Str, col1Str);
+                    continue;
+                }
+                
+                log.info("[ReportEngine-RowTpl] 识别为小计行: 名称='{}', col0='{}', col1='{}'", subtotalName, col0Str, col1Str);
+                Map<String, Object> rowMap = buildRowMap(subtotalName,
                         toPlainString(row.get(finalAmountColIdx)),
                         toPlainString(row.get(finalRatioColIdx)),
                         colNameMap, finalNameColIdx, finalAmountColIdx, finalRatioColIdx,
-                        "subtotal");
+                        "subtotal", sheetName);
                 result.add(rowMap);
                 continue;
             }
-
-            // 明细行：col1为纯数字编号 或 "其他"（兼容旧格式 Excel）
-            boolean isSeqNum = col1Str.matches("^\\d+$");
-            boolean isOther = "其他".equals(col1Str);
-            if (isSeqNum || isOther) {
-                String name = isOther ? "其他" : colNameStr;
-                if (name.isEmpty() && !isOther) continue; // 名称为空跳过
+            
+            if (isGroupRowCondition) {
+                // 纯分组标题行（col0非空, col1空, colName空）
+                // 如果当前分组被标记为跳过，则跳过
+                if (skipCurrentGroup) {
+                    log.info("[ReportEngine-RowTpl] 跳过分组行（分组无数据）: col0='{}'", col0Str);
+                    continue;
+                }
+                log.info("[ReportEngine-RowTpl] 识别为纯分组标题行: col0='{}'", col0Str);
+                Map<String, Object> rowMap = buildRowMap(col0Str, "", "",
+                        colNameMap, finalNameColIdx, finalAmountColIdx, finalRatioColIdx,
+                        "group", sheetName);
+                result.add(rowMap);
+                continue;
+            }
+            
+            if (isGroupRowCondition2) {
+                // 分组行同时含数据（col0是新分组名，col1是序号）
+                if (skipCurrentGroup) {
+                    log.info("[ReportEngine-RowTpl] 跳过分组+数据行（分组无数据）: col0='{}', col1='{}', colName='{}'", col0Str, col1Str, colNameStr);
+                    continue;
+                }
+                // 提取group数据（用于第一列显示分组名）
+                log.info("[ReportEngine-RowTpl] 识别为分组首行数据: col0='{}', col1='{}', colName='{}'", col0Str, col1Str, colNameStr);
+                Map<String, Object> groupRowMap = new LinkedHashMap<>();
+                groupRowMap.put("_rowType", "group");
+                groupRowMap.put("_group_title", col0Str);
+                result.add(groupRowMap);
+                
+                // 提取data数据（用于第二列显示供应商名称）
+                String name = colNameStr;
                 if (!name.isEmpty()) {
-                    Map<String, Object> rowMap = buildRowMap(name,
+                    Map<String, Object> dataRowMap = buildRowMap(name,
                             toPlainString(row.get(finalAmountColIdx)),
                             toPlainString(row.get(finalRatioColIdx)),
                             colNameMap, finalNameColIdx, finalAmountColIdx, finalRatioColIdx,
-                            "data");
-                    result.add(rowMap);
+                            "data", sheetName);
+                    result.add(dataRowMap);
                 }
+                continue;
+            }
+
+            // 明细行：col1为纯数字编号 或 "其他"
+            // 无论是数字编号还是"其他"，都应该使用C列（供应商名称/客户名称列）的数据
+            boolean isSeqNum = col1Str.matches("^\\d+$");
+            boolean isOther = "其他".equals(col1Str);
+            if (isSeqNum || isOther) {
+                // 如果当前分组被标记为跳过，则跳过
+                if (skipCurrentGroup) {
+                    log.info("[ReportEngine-RowTpl] 跳过数据行（分组无数据）: col1='{}', colName='{}'", col1Str, colNameStr);
+                    continue;
+                }
+                // 使用C列（供应商名称列）的数据
+                String name = colNameStr;
+                if (name.isEmpty() && isOther) {
+                    // 如果C列为空且B列是"其他"，使用"其它关联方"以匹配历史报告
+                    name = "其它关联方";
+                    log.info("[ReportEngine-RowTpl] 行{} B列='其他'且C列为空，使用'其它关联方'", i);
+                } else if (name.isEmpty()) {
+                    // 如果C列为空且不是"其他"行，跳过此行
+                    log.info("[ReportEngine-RowTpl] 行{} C列（供应商名称）为空，跳过", i);
+                    continue;
+                }
+                Map<String, Object> rowMap = buildRowMap(name,
+                        toPlainString(row.get(finalAmountColIdx)),
+                        toPlainString(row.get(finalRatioColIdx)),
+                        colNameMap, finalNameColIdx, finalAmountColIdx, finalRatioColIdx,
+                        "data", sheetName);
+                // 不再设置 _group_title（依赖Word合并单元格特性）
+                result.add(rowMap);
                 continue;
             }
 
@@ -603,7 +767,7 @@ public class ReportGenerateEngine {
                         toPlainString(row.get(finalAmountColIdx)),
                         toPlainString(row.get(finalRatioColIdx)),
                         colNameMap, finalNameColIdx, finalAmountColIdx, finalRatioColIdx,
-                        "data");
+                        "data", sheetName);
                 result.add(rowMap);
                 continue;
             }
@@ -614,7 +778,14 @@ public class ReportGenerateEngine {
             }
         }
 
-        log.debug("[ReportEngine-RowTpl] Sheet '{}' 行模板数据提取完成，共 {} 行", sheetName, result.size());
+        log.info("[ReportEngine-RowTpl] ===== Sheet '{}' 行模板数据提取完成，共 {} 行 =====", sheetName, result.size());
+        for (int i = 0; i < result.size(); i++) {
+            Map<String, Object> row = result.get(i);
+            log.info("[ReportEngine-RowTpl] 数据行[{}]: _rowType={}, 内容={}", i, row.get("_rowType"), row);
+        }
+        // 特别检查是否有group行
+        long groupCount = result.stream().filter(m -> "group".equals(m.get("_rowType"))).count();
+        log.info("[ReportEngine-RowTpl] ===== group行数量: {} =====", groupCount);
         return result;
     }
 
@@ -1435,17 +1606,43 @@ public class ReportGenerateEngine {
     private Map<String, Object> buildRowMap(String name, String amount, String ratio,
                                              Map<Integer, String> colNameMap,
                                              int nameColIdx, int amountColIdx, int ratioColIdx,
-                                             String rowType) {
+                                             String rowType, String sheetName) {
         Map<String, Object> map = new LinkedHashMap<>();
-        // 按动态字段名存入
-        String nameField = colNameMap.getOrDefault(nameColIdx, "名称");
-        String amountField = colNameMap.getOrDefault(amountColIdx, "交易金额");
-        String ratioField = colNameMap.getOrDefault(ratioColIdx, "占比");
+        
+        // 根据 sheet 名称使用对应的标准字段名（与 Word 模板占位符匹配）
+        String nameField, amountField, ratioField;
+        if ("4 供应商清单".equals(sheetName)) {
+            // 关联采购明细表格使用的字段名
+            nameField = "供应商名称";
+            amountField = "金额（人民币）";
+            ratioField = "占关联采购总金额比例";
+        } else if ("5 客户清单".equals(sheetName)) {
+            // 关联销售明细表格使用的字段名
+            nameField = "客户名称";
+            amountField = "金额（人民币）";
+            ratioField = "占关联销售总金额比例";
+        } else {
+            // 默认使用从 Excel 解析的字段名
+            nameField = colNameMap.getOrDefault(nameColIdx, "名称");
+            amountField = colNameMap.getOrDefault(amountColIdx, "交易金额");
+            ratioField = colNameMap.getOrDefault(ratioColIdx, "占比");
+        }
+        
         map.put(nameField, name);
         map.put(amountField, amount);
         map.put(ratioField, ratio);
         // 存入行类型标识，供填充引擎按类型路由到对应模板行克隆
         map.put("_rowType", rowType != null ? rowType : "data");
+        
+        // group行特殊处理：添加 _group_title 字段，用于填充group行第一列
+        if ("group".equals(rowType)) {
+            map.put("_group_title", name);
+            log.info("[buildRowMap] group行添加 _group_title='{}'", name);
+        }
+        
+        log.info("[buildRowMap] sheet='{}' 使用字段名: nameField='{}', amountField='{}', ratioField='{}', values: name='{}', amount='{}', ratio='{}'",
+                sheetName, nameField, amountField, ratioField, name, amount, ratio);
+        
         return map;
     }
 
@@ -1659,7 +1856,7 @@ public class ReportGenerateEngine {
             boolean found = false;
             for (XWPFTable table : doc.getTables()) {
                 if (tableHasRowTemplateMarkerFor(table, phName)) {
-                    fillTableByRowTemplateMapped(table, rowData);
+                    fillTableByRowTemplateMapped(table, rowData, phName);
                     found = true;
                     break;
                 }
@@ -1935,8 +2132,9 @@ public class ReportGenerateEngine {
      *
      * @param table   目标 Word 表格
      * @param rowData 数据行列表，每行为字段名->值的 Map
+     * @param placeholderName 占位符名称（用于判断是否是特殊表格）
      */
-    private void fillTableByRowTemplateMapped(XWPFTable table, List<Map<String, Object>> rowData) {
+    private void fillTableByRowTemplateMapped(XWPFTable table, List<Map<String, Object>> rowData, String placeholderName) {
         if (rowData == null) {
             rowData = Collections.emptyList();
         }
@@ -2058,26 +2256,68 @@ public class ReportGenerateEngine {
 
         // 4. 填充数据（直接操作 CTRow）
         int dataIdx = 0;
+        int subtotalIdx = 0;  // subtotal数据索引
+        int groupIdx = 0;     // group数据索引
         for (RowInfo info : finalTplRows) {
             CTRow ctRow = ctTbl.getTrArray(info.idx);
+            log.info("[ReportEngine-RowTplMapped] 处理行类型={}, 索引={}, colFields={}", info.type, info.idx, info.colFields);
 
             if ("data".equals(info.type)) {
                 while (dataIdx < rowData.size() && "subtotal".equals(rowData.get(dataIdx).get("_rowType"))) {
                     dataIdx++;
                 }
                 if (dataIdx < rowData.size()) {
-                    fillCtRowWithData(ctRow, info.colFields, rowData.get(dataIdx));
+                    log.info("[ReportEngine-RowTplMapped] 填充data行，dataIdx={}", dataIdx);
+                    fillCtRowWithData(ctRow, info.colFields, rowData.get(dataIdx), "data", placeholderName);
                     dataIdx++;
                 } else {
-                    fillCtRowWithData(ctRow, info.colFields, Collections.emptyMap());
+                    log.info("[ReportEngine-RowTplMapped] 填充data行（空数据）");
+                    fillCtRowWithData(ctRow, info.colFields, Collections.emptyMap(), "data", placeholderName);
                 }
             } else if ("subtotal".equals(info.type)) {
-                rowData.stream()
+                // 按顺序取subtotal数据
+                List<Map<String, Object>> subtotalList = rowData.stream()
                         .filter(m -> "subtotal".equals(m.get("_rowType")))
-                        .findFirst()
-                        .ifPresent(subtotalData -> fillCtRowWithData(ctRow, info.colFields, subtotalData));
+                        .collect(java.util.stream.Collectors.toList());
+                
+                if (subtotalIdx < subtotalList.size()) {
+                    log.info("[ReportEngine-RowTplMapped] 填充subtotal行，subtotalIdx={}", subtotalIdx);
+                    fillCtRowWithData(ctRow, info.colFields, subtotalList.get(subtotalIdx), "subtotal", placeholderName);
+                    subtotalIdx++;
+                } else {
+                    log.info("[ReportEngine-RowTplMapped] 填充subtotal行（无更多数据）");
+                    fillCtRowWithData(ctRow, info.colFields, Collections.emptyMap(), "subtotal", placeholderName);
+                }
+            } else if ("group".equals(info.type)) {
+                log.info("[ReportEngine-RowTplMapped] 处理group行");
+                // group 行：查找对应的 group 数据（根据 _rowType=group）
+                // 注意：group 行的第一列(_group_title)应该显示 group 名称
+                Map<String, Object> groupData = new HashMap<>();
+                
+                // 查找第一个 group 类型的数据行（group行通常在data行之前）
+                Optional<Map<String, Object>> groupDataOpt = rowData.stream()
+                        .filter(m -> "group".equals(m.get("_rowType")))
+                        .findFirst();
+                
+                if (groupDataOpt.isPresent()) {
+                    Map<String, Object> rawGroupData = groupDataOpt.get();
+                    // 对于 _group_title 字段，使用 _group_title 字段的值（buildRowMap已设置）
+                    // 或者使用供应商名称/客户名称字段的值作为备选
+                    Object groupName = rawGroupData.get("_group_title");
+                    if (groupName == null) {
+                        groupName = rawGroupData.get("供应商名称");
+                    }
+                    if (groupName == null) {
+                        groupName = rawGroupData.get("客户名称");
+                    }
+                    if (groupName != null) {
+                        groupData.put("_group_title", groupName.toString());
+                        log.info("[ReportEngine-RowTplMapped] group行标题='{}'", groupName);
+                    }
+                }
+                
+                fillCtRowWithData(ctRow, info.colFields, groupData, "group", placeholderName);
             }
-            // group 行保持原样
         }
 
         log.info("[ReportEngine-RowTplMapped] 行模板填充完成：处理了 {} 个模板行，填充了 {} 行数据，finalTplRows包含subtotal={}",
@@ -2112,30 +2352,119 @@ public class ReportGenerateEngine {
                     }
                 }
             }
-            fields.add(extractColFieldName(cellText.toString()));
+            String fieldName = extractColFieldName(cellText.toString());
+            fields.add(fieldName);
         }
         return fields;
     }
 
+    /**
+     * 判断单元格是否是垂直合并的延续单元格（vMerge=continue）。
+     * 垂直合并的延续单元格不包含实际的占位符标记，需要从其他行推断。
+     */
+    private boolean isVerticalMergeContinue(CTTc ctTc) {
+        try {
+            org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTcPr tcPr = ctTc.getTcPr();
+            if (tcPr != null && tcPr.isSetVMerge()) {
+                Object vMergeObj = tcPr.getVMerge();
+                if (vMergeObj != null) {
+                    String vMergeStr = vMergeObj.toString().toLowerCase();
+                    return vMergeStr.contains("continue");
+                }
+            }
+        } catch (Exception e) {
+            // 忽略异常，默认不是延续单元格
+        }
+        return false;
+    }
+
     /** 向 CTRow 中按字段名填充数据（CT层，不依赖 POI 缓存） */
-    private void fillCtRowWithData(CTRow ctRow, List<String> colFields, Map<String, Object> dataMap) {
+    private void fillCtRowWithData(CTRow ctRow, List<String> colFields, Map<String, Object> dataMap, String rowType, String placeholderName) {
         CTTc[] cells = ctRow.getTcArray();
         int limit = Math.min(cells.length, colFields.size());
+        
+        // 特殊处理：关联采购明细和关联销售明细的data行和subtotal行，跳过第一列
+        boolean isSpecialTable = "关联采购明细".equals(placeholderName) || "关联销售明细".equals(placeholderName);
+        
+        log.info("[fillCtRowWithData] 开始填充，单元格数={}, 字段数={}, dataMap.keys={}, rowType={}, placeholderName={}", 
+                cells.length, colFields.size(), dataMap.keySet(), rowType, placeholderName);
         for (int ci = 0; ci < limit; ci++) {
+            // 特殊处理：关联采购明细和关联销售明细的data行第一列，清空单元格内容（利用Word合并单元格继承特性）
+            // subtotal行第一列需要正常填充小计名称（如"境外关联采购小计"、"关联采购小计"）
+            if (isSpecialTable && ci == 0 && "data".equals(rowType)) {
+                // 清空data行第一列，移除占位符
+                setCtCellText(cells[ci], "");
+                log.info("[fillCtRowWithData] 特殊表格data行第一列，清空占位符");
+                continue;
+            }
+            
             String fieldName = colFields.get(ci);
             String val = "";
+            log.info("[fillCtRowWithData] 列{}: fieldName='{}'", ci, fieldName);
             if (fieldName != null && dataMap.containsKey(fieldName)) {
                 Object v = dataMap.get(fieldName);
                 val = v != null ? v.toString() : "";
+                log.info("[fillCtRowWithData] 列{}: 字段名='{}', 值='{}'", ci, fieldName, val);
+            } else if (fieldName != null) {
+                log.info("[fillCtRowWithData] 列{}: 字段名='{}' 在 dataMap 中未找到", ci, fieldName);
+            }
+            // 特殊处理 _group_title 字段（group行第一列）
+            if ("_group_title".equals(fieldName) && dataMap.containsKey("_group_title")) {
+                val = dataMap.get("_group_title").toString();
+                log.info("[fillCtRowWithData] 列{}: _group_title字段，值='{}'", ci, val);
+            }
+            
+            // 特殊处理：关联采购明细和关联销售明细的subtotal行
+            // 第二个subtotal行（总计行，如"关联采购小计"）：第一列和第二列合并，需要填充小计名称
+            // 第一个subtotal行（分组小计，如"境外关联采购小计"）：第一列和第二列独立，第一列是垂直合并延续，第二列填充小计名称
+            // 判断依据：如果第一列的fieldName为null（没有_col_标记），则是第一个subtotal行（分组小计）
+            if (isSpecialTable && "subtotal".equals(rowType) && ci == 0) {
+                String firstColField = colFields.get(0);
+                if (firstColField == null) {
+                    // 第一个subtotal行：第一列是垂直合并延续，清空
+                    val = "";
+                    log.info("[fillCtRowWithData] 特殊表格subtotal行（分组小计）第一列是垂直合并延续，清空");
+                }
+                // 第二个subtotal行（总计行）：第一列有_col_标记，正常填充小计名称
+            }
+            
+            // 如果字段名为null（没有_col_标记），但该单元格包含_tpl_或_row_标记，则清空单元格
+            if (fieldName == null) {
+                String cellText = getCtCellText(cells[ci]);
+                log.info("[fillCtRowWithData] 列{}: fieldName为null, cellText='{}'", ci, 
+                        cellText.length() > 50 ? cellText.substring(0, 50) + "..." : cellText);
+                if (cellText.contains("{{_tpl_") || cellText.contains("{{_row_")) {
+                    val = ""; // 清空占位符
+                    log.info("[fillCtRowWithData] 列{}: 清空占位符", ci);
+                }
             }
             setCtCellText(cells[ci], val);
         }
+    }
+
+    /** 向 CTRow 中按字段名填充数据（CT层，不依赖 POI 缓存）- 兼容旧版本 */
+    private void fillCtRowWithData(CTRow ctRow, List<String> colFields, Map<String, Object> dataMap) {
+        fillCtRowWithData(ctRow, colFields, dataMap, "unknown", "unknown");
+    }
+
+    /** 从 CTTc 读取纯文本 */
+    private String getCtCellText(CTTc ctTc) {
+        StringBuilder sb = new StringBuilder();
+        for (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTP ctp : ctTc.getPArray()) {
+            for (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR ctr : ctp.getRArray()) {
+                for (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText t : ctr.getTArray()) {
+                    if (t.getStringValue() != null) sb.append(t.getStringValue());
+                }
+            }
+        }
+        return sb.toString();
     }
 
     /** 向 CTTc 写入文本（保留第一个 run 的格式和段落属性，清除占位符内容） */
     private void setCtCellText(CTTc ctTc, String value) {
         org.openxmlformats.schemas.wordprocessingml.x2006.main.CTP[] paras = ctTc.getPArray();
         
+        boolean isFirstPara = true;
         for (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTP ctp : paras) {
             // 保存段落的属性（PPr）
             org.openxmlformats.schemas.wordprocessingml.x2006.main.CTPPr pPr = ctp.getPPr();
@@ -2143,34 +2472,48 @@ public class ReportGenerateEngine {
             org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR[] runs = ctp.getRArray();
             if (runs.length == 0) {
                 // 没有 run，新建一个
-                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR newRun = ctp.addNewR();
-                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText newT = newRun.addNewT();
-                newT.setStringValue(value);
+                if (isFirstPara) {
+                    org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR newRun = ctp.addNewR();
+                    org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText newT = newRun.addNewT();
+                    newT.setStringValue(value);
+                }
+                isFirstPara = false;
                 continue;
             }
             
-            // 保留第一个 run，设置文本值
-            org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR firstRun = runs[0];
-            org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText[] texts = firstRun.getTArray();
-            if (texts.length > 0) {
-                texts[0].setStringValue(value);
-                // 清除同一 run 内其余 t
-                for (int ti = 1; ti < texts.length; ti++) texts[ti].setStringValue("");
+            if (isFirstPara) {
+                // 第一个段落：保留第一个 run，设置文本值
+                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR firstRun = runs[0];
+                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText[] texts = firstRun.getTArray();
+                if (texts.length > 0) {
+                    texts[0].setStringValue(value);
+                    // 清除同一 run 内其余 t
+                    for (int ti = 1; ti < texts.length; ti++) texts[ti].setStringValue("");
+                } else {
+                    // run 无 t 节点，新建一个
+                    org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText newT = firstRun.addNewT();
+                    newT.setStringValue(value);
+                }
+                
+                // 删除多余的 run（从后往前删，避免索引变化）
+                for (int ri = runs.length - 1; ri > 0; ri--) {
+                    ctp.removeR(ri);
+                }
+                
+                // 确保段落属性被保留（如果之前没有，尝试设置默认的垂直对齐）
+                if (pPr != null && ctp.getPPr() == null) {
+                    ctp.setPPr(pPr);
+                }
             } else {
-                // run 无 t 节点，新建一个
-                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText newT = firstRun.addNewT();
-                newT.setStringValue(value);
+                // 非第一个段落：清空所有内容
+                for (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR run : runs) {
+                    org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText[] texts = run.getTArray();
+                    for (org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText t : texts) {
+                        t.setStringValue("");
+                    }
+                }
             }
-            
-            // 删除多余的 run（从后往前删，避免索引变化）
-            for (int ri = runs.length - 1; ri > 0; ri--) {
-                ctp.removeR(ri);
-            }
-            
-            // 确保段落属性被保留（如果之前没有，尝试设置默认的垂直对齐）
-            if (pPr != null && ctp.getPPr() == null) {
-                ctp.setPPr(pPr);
-            }
+            isFirstPara = false;
         }
         
         // 确保单元格的垂直对齐属性被保留

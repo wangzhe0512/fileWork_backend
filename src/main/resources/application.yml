@@ -83,7 +83,16 @@ springdoc:
 cors:
   allowed-origins: http://localhost:5173
 
-# 反向生成引擎配置
+# 日志配置
+logging:
+  file:
+    name: ./logs/file-processing-backend.log
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+  level:
+    root: INFO
+    com.fileproc.report.service.ReportGenerateEngine: DEBUG
 # Sheet类型识别为全自动（按内容识别），无需手动配置白名单
 reverse-engine: {}
 
